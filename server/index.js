@@ -138,7 +138,15 @@ const storage = multer.diskStorage({
   destination: uploadsDir,
   filename: (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname))
 });
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ 
+  storage, 
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/', 'video/', 'audio/'];
+    if (allowed.some(t => file.mimetype.startsWith(t))) cb(null, true);
+    else cb(new Error('Tipo de arquivo não permitido'));
+  }
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
@@ -191,7 +199,8 @@ function sanitizeGroup(g) {
 app.post('/api/register', async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Campos obrigatórios' });
-  if (cache.usersByEmail[email]) return res.status(400).json({ error: 'Email já cadastrado' });
+  if (!email.toLowerCase().endsWith('@gmail.com')) return res.status(400).json({ error: 'Use um email Gmail (@gmail.com)' });
+  if (cache.usersByEmail[email.toLowerCase()]) return res.status(400).json({ error: 'Email já cadastrado' });
   const userId = uuidv4(); const friendCode = generateFriendCode();
   const hashedPassword = await bcrypt.hash(password, 10);
   const user = { id: userId, name, email, password: hashedPassword, friendCode, avatar: null, bio: '', status: 'online', friends: [], groups: [], createdAt: new Date().toISOString(), customNames: {}, securityQuestions: null, twoFactorEnabled: false, twoFactorSecret: null, recoveryMethods: ['email'], recoveryEmails: [] };
@@ -203,7 +212,7 @@ app.post('/api/register', async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  const userId = cache.usersByEmail[email];
+  const userId = cache.usersByEmail[email.toLowerCase()];
   if (!userId) return res.status(401).json({ error: 'Credenciais inválidas' });
   const user = cache.users[userId];
   const valid = await bcrypt.compare(password, user.password);
@@ -233,6 +242,60 @@ app.put('/api/profile', (req, res) => {
   saveUser(user);
   io.emit('user_updated', { userId, name: user.name, bio: user.bio, status: user.status, avatar: user.avatar });
   res.json({ user: sanitizeUser(user) });
+});
+
+// ─── MEDIA UPLOAD ───────────────────────────────────────────
+app.post('/api/upload-media', upload.single('media'), (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
+  const url = '/uploads/' + req.file.filename;
+  const mimetype = req.file.mimetype;
+  let type = 'file';
+  if (mimetype.startsWith('image/')) type = 'image';
+  else if (mimetype.startsWith('video/')) type = 'video';
+  else if (mimetype.startsWith('audio/')) type = 'audio';
+  res.json({ url, type });
+});
+
+// ─── STICKERS ───────────────────────────────────────────────
+app.post('/api/stickers', upload.single('sticker'), async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
+  const user = cache.users[userId];
+  if (!user.stickers) user.stickers = [];
+  const sticker = { id: uuidv4(), url: '/uploads/' + req.file.filename, favorited: false, createdAt: new Date().toISOString() };
+  user.stickers.push(sticker);
+  saveUser(user);
+  res.json({ sticker });
+});
+
+app.get('/api/stickers', (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const user = cache.users[userId];
+  res.json({ stickers: user.stickers || [] });
+});
+
+app.put('/api/stickers/:stickerId/favorite', (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const user = cache.users[userId];
+  const sticker = (user.stickers || []).find(s => s.id === req.params.stickerId);
+  if (!sticker) return res.status(404).json({ error: 'Figurinha não encontrada' });
+  sticker.favorited = !sticker.favorited;
+  saveUser(user);
+  res.json({ sticker });
+});
+
+app.delete('/api/stickers/:stickerId', (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const user = cache.users[userId];
+  user.stickers = (user.stickers || []).filter(s => s.id !== req.params.stickerId);
+  saveUser(user);
+  res.json({ success: true });
 });
 
 app.post('/api/avatar', upload.single('avatar'), (req, res) => {
@@ -766,12 +829,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_message', (data) => {
-    const { to, text, type = 'text', chatId, replyTo } = data;
+    const { to, text, type = 'text', chatId, replyTo, url } = data;
     const userId = socket.userId;
-    if (!userId || !text?.trim()) return;
+    if (!userId) return;
+    if (type === 'text' && !text?.trim()) return;
     const user = cache.users[userId]; if (!user) return;
     const msgId = uuidv4(); const timestamp = new Date().toISOString();
-    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: text.trim(), type, timestamp, read: false, chatId, reactions: {}, replyTo: replyTo || null };
+    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, chatId, reactions: {}, replyTo: replyTo || null };
     if (!cache.messages[chatId]) cache.messages[chatId] = [];
     cache.messages[chatId].push(message);
     saveMessage(chatId, message); // Persistir no MongoDB

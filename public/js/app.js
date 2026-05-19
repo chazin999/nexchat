@@ -164,6 +164,7 @@ async function doRegister() {
   const errEl = document.getElementById('reg-error');
   errEl.classList.add('hidden');
   if (!name || !email || !password) return showError(errEl, 'Preencha todos os campos');
+  if (!email.toLowerCase().endsWith('@gmail.com')) return showError(errEl, 'Use um email Gmail (@gmail.com)');
   if (password.length < 6) return showError(errEl, 'Senha mínima de 6 caracteres');
   const btn = document.getElementById('register-btn');
   btn.textContent = 'Criando...'; btn.disabled = true;
@@ -255,29 +256,19 @@ function initSocket() {
     }
   });
 
-socket.on('friend_request', (req) => {
+  socket.on('friend_request', (req) => {
     showToast('👥 ' + req.fromName + ' quer ser seu amigo! Clique no 🔔 para aceitar.');
+    // Atualiza badge imediatamente sem esperar o fetch
     const badge = document.getElementById('req-badge');
     if (badge) {
       const current = parseInt(badge.textContent) || 0;
       badge.textContent = current + 1;
       badge.classList.remove('hidden');
     }
-    const list = document.getElementById('requests-list');
-    if (list) {
-      const empty = list.querySelector('.empty-state-sm');
-      if (empty) empty.remove();
-      const div = document.createElement('div');
-      div.className = 'request-item';
-      div.innerHTML = '<img src="' + (req.fromAvatar || '') + '" class="avatar avatar-sm" /><div class="request-info"><strong>' + req.fromName + '</strong><span>' + req.fromCode + '</span></div><div class="request-actions"><button class="btn-accept">✓ Aceitar</button><button class="btn-reject">✕ Recusar</button></div>';
-      div.querySelector('.btn-accept').addEventListener('click', function() { acceptRequest(req.id); });
-      div.querySelector('.btn-reject').addEventListener('click', function() { rejectRequest(req.id); });
-      list.appendChild(div);
-    }
     loadFriendRequests();
   });
 
-socket.on('pending_requests', ({ count }) => {
+  socket.on('pending_requests', ({ count }) => {
     const badge = document.getElementById('req-badge');
     if (badge) { badge.textContent = count; badge.classList.remove('hidden'); }
     loadFriendRequests();
@@ -366,16 +357,16 @@ async function loadGroups() {
 async function loadFriendRequests() {
   try {
     const res = await fetch('/api/friends/requests');
-    if (!res.ok) return;
+    if (!res.ok) { console.error('[loadFriendRequests] status:', res.status); return; }
     const data = await res.json();
     const requests = data.requests || [];
     const badge = document.getElementById('req-badge');
     if (badge) {
       if (requests.length > 0) { badge.textContent = requests.length; badge.classList.remove('hidden'); }
-      else { badge.classList.add('hidden'); }
+      else { badge.textContent = '0'; badge.classList.add('hidden'); }
     }
     renderRequestsList(requests);
-  } catch(e) { console.error('[requests] erro:', e); }
+  } catch(e) { console.error('[loadFriendRequests] erro:', e); }
 }
 
 // ─── CHAT LIST ────────────────────────────────────────────
@@ -591,10 +582,35 @@ function buildMessageEl(msg, isOut, showAvatar) {
     bubble.appendChild(rp);
   }
 
-  const textEl = document.createElement('div');
-  textEl.className = 'msg-text';
-  textEl.textContent = msg.text;
-  bubble.appendChild(textEl);
+  if (msg.type === 'image') {
+    const img = document.createElement('img');
+    img.className = 'msg-image';
+    img.src = msg.url;
+    img.alt = 'Imagem';
+    img.addEventListener('click', () => openMediaPreview('image', msg.url));
+    bubble.appendChild(img);
+  } else if (msg.type === 'video') {
+    const vid = document.createElement('video');
+    vid.className = 'msg-video';
+    vid.src = msg.url;
+    vid.controls = true;
+    vid.preload = 'metadata';
+    bubble.appendChild(vid);
+  } else if (msg.type === 'audio') {
+    bubble.appendChild(buildAudioPlayer(msg.url));
+  } else if (msg.type === 'sticker') {
+    const img = document.createElement('img');
+    img.className = 'msg-sticker';
+    img.src = msg.url;
+    img.alt = 'Figurinha';
+    img.addEventListener('click', () => openMediaPreview('image', msg.url));
+    bubble.appendChild(img);
+  } else {
+    const textEl = document.createElement('div');
+    textEl.className = 'msg-text';
+    textEl.textContent = msg.text;
+    bubble.appendChild(textEl);
+  }
 
   const footer = document.createElement('div');
   footer.className = 'msg-footer';
@@ -1336,12 +1352,28 @@ function showMemberPopup(e, member, groupData, callerIsAdmin, callerIsOwner) {
   popup.classList.remove('hidden');
 }
 
-// ─── BACK BUTTON ──────────────────────────────────────────
+// ─── BACK BUTTON + SWIPE ──────────────────────────────────
+function goBackToList() {
+  document.getElementById('app').classList.remove('chat-open');
+  activeChat = null;
+}
+
 function setupBackBtn() {
-  document.getElementById('back-btn').addEventListener('click', function() {
-    document.getElementById('app').classList.remove('chat-open');
-    activeChat = null;
-  });
+  document.getElementById('back-btn').addEventListener('click', goBackToList);
+
+  // Swipe right to go back
+  const main = document.querySelector('main') || document.getElementById('app');
+  let touchStartX = 0, touchStartY = 0;
+  main.addEventListener('touchstart', function(e) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  main.addEventListener('touchend', function(e) {
+    if (!activeChat) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+    if (dx > 80 && dy < 60) goBackToList();
+  }, { passive: true });
 }
 
 // ─── THEME TOGGLE ─────────────────────────────────────────
@@ -2152,3 +2184,258 @@ function showToast(msg) {
   clearTimeout(toast._timer);
   toast._timer = setTimeout(function() { toast.classList.add('hidden'); }, 3000);
 }
+
+// ─── AUDIO PLAYER ─────────────────────────────────────────
+function buildAudioPlayer(url) {
+  const audio = new Audio(url);
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-audio-player';
+
+  const playBtn = document.createElement('button');
+  playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+
+  const progress = document.createElement('div');
+  progress.className = 'msg-audio-progress';
+  const bar = document.createElement('div');
+  bar.className = 'msg-audio-bar';
+  progress.appendChild(bar);
+
+  const timeEl = document.createElement('span');
+  timeEl.className = 'msg-audio-time';
+  timeEl.textContent = '0:00';
+
+  let playing = false;
+  playBtn.addEventListener('click', () => {
+    if (playing) { audio.pause(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'; playing = false; }
+    else { audio.play(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'; playing = true; }
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    const pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
+    bar.style.width = pct + '%';
+    const s = Math.floor(audio.currentTime);
+    timeEl.textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+  });
+
+  audio.addEventListener('ended', () => {
+    playing = false;
+    playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+    bar.style.width = '0%';
+  });
+
+  progress.addEventListener('click', (e) => {
+    const r = progress.getBoundingClientRect();
+    const pct = (e.clientX - r.left) / r.width;
+    audio.currentTime = audio.duration * pct;
+  });
+
+  wrap.appendChild(playBtn);
+  wrap.appendChild(progress);
+  wrap.appendChild(timeEl);
+  return wrap;
+}
+
+// ─── MEDIA PREVIEW ────────────────────────────────────────
+function openMediaPreview(type, url) {
+  const ov = document.createElement('div');
+  ov.className = 'media-preview-overlay';
+  const close = document.createElement('button');
+  close.className = 'media-preview-close';
+  close.textContent = '×';
+  close.addEventListener('click', () => ov.remove());
+  ov.appendChild(close);
+  if (type === 'image') {
+    const img = document.createElement('img');
+    img.src = url;
+    ov.appendChild(img);
+  }
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
+// ─── AUDIO RECORDING ──────────────────────────────────────
+let mediaRecorder = null, audioChunks = [], audioTimerInterval = null, audioSeconds = 0;
+
+function setupAudioRecorder() {
+  const recordBtn = document.getElementById('audio-record-btn');
+  const recorderUI = document.getElementById('audio-recorder');
+  const inputRow = document.getElementById('input-row');
+  const cancelBtn = document.getElementById('audio-cancel-btn');
+  const sendBtn = document.getElementById('audio-send-btn');
+  const timerEl = document.getElementById('audio-timer');
+
+  if (!recordBtn) return;
+
+  recordBtn.addEventListener('click', async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      audioSeconds = 0;
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.start();
+      recordBtn.classList.add('recording');
+      recorderUI.classList.remove('hidden');
+      inputRow.classList.add('hidden');
+      audioTimerInterval = setInterval(() => {
+        audioSeconds++;
+        timerEl.textContent = Math.floor(audioSeconds/60) + ':' + String(audioSeconds%60).padStart(2,'0');
+      }, 1000);
+    } catch(e) {
+      showToast('❌ Permissão de microfone negada');
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    if (mediaRecorder) { mediaRecorder.stream.getTracks().forEach(t => t.stop()); mediaRecorder = null; }
+    clearInterval(audioTimerInterval);
+    recorderUI.classList.add('hidden');
+    inputRow.classList.remove('hidden');
+    document.getElementById('audio-record-btn').classList.remove('recording');
+  });
+
+  sendBtn.addEventListener('click', () => {
+    if (!mediaRecorder) return;
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const fd = new FormData();
+      fd.append('media', blob, 'audio.webm');
+      try {
+        const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.url && activeChat && socket) {
+          const chatId = activeChatId();
+          const to = activeChat.data.id;
+          socket.emit('send_message', { to, text: '🎤 Áudio', url: data.url, chatId, type: 'audio' });
+        }
+      } catch(e) { showToast('❌ Erro ao enviar áudio'); }
+      recorderUI.classList.add('hidden');
+      inputRow.classList.remove('hidden');
+      document.getElementById('audio-record-btn').classList.remove('recording');
+    };
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    mediaRecorder.stop();
+    clearInterval(audioTimerInterval);
+  });
+}
+
+// ─── MEDIA UPLOAD (FOTO/VÍDEO) ────────────────────────────
+function setupMediaUpload() {
+  const btn = document.getElementById('media-btn');
+  const input = document.getElementById('media-file-input');
+  if (!btn || !input) return;
+
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { showToast('❌ Arquivo muito grande (máx 50MB)'); return; }
+    const fd = new FormData();
+    fd.append('media', file);
+    showToast('📤 Enviando...');
+    try {
+      const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.url && activeChat && socket) {
+        const chatId = activeChatId();
+        const to = activeChat.data.id;
+        const type = data.type || (file.type.startsWith('video') ? 'video' : 'image');
+        socket.emit('send_message', { to, text: type === 'video' ? '🎥 Vídeo' : '📷 Foto', url: data.url, chatId, type });
+      }
+    } catch(e) { showToast('❌ Erro ao enviar mídia'); }
+    input.value = '';
+  });
+}
+
+// ─── STICKERS ─────────────────────────────────────────────
+let stickerList = [];
+let stickerTab = 'all';
+
+async function setupStickers() {
+  const toggleBtn = document.getElementById('sticker-toggle-btn');
+  const panel = document.getElementById('sticker-panel');
+  const uploadBtn = document.getElementById('sticker-upload-btn');
+  const fileInput = document.getElementById('sticker-file-input');
+  if (!toggleBtn) return;
+
+  toggleBtn.addEventListener('click', () => {
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) loadStickers();
+  });
+
+  document.querySelectorAll('.sticker-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.sticker-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      stickerTab = tab.dataset.tab;
+      renderStickerGrid();
+    });
+  });
+
+  uploadBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append('sticker', file);
+    try {
+      const res = await fetch('/api/stickers', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.sticker) { stickerList.push(data.sticker); renderStickerGrid(); showToast('🎭 Figurinha adicionada!'); }
+    } catch(e) { showToast('❌ Erro ao adicionar figurinha'); }
+    fileInput.value = '';
+  });
+}
+
+async function loadStickers() {
+  try {
+    const res = await fetch('/api/stickers');
+    const data = await res.json();
+    stickerList = data.stickers || [];
+    renderStickerGrid();
+  } catch(e) {}
+}
+
+function renderStickerGrid() {
+  const grid = document.getElementById('sticker-grid'); if (!grid) return;
+  const list = stickerTab === 'fav' ? stickerList.filter(s => s.favorited) : stickerList;
+  if (list.length === 0) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:20px;font-size:13px">' + (stickerTab === 'fav' ? 'Nenhuma favorita ainda' : 'Nenhuma figurinha. Adicione uma!') + '</div>';
+    return;
+  }
+  grid.innerHTML = '';
+  list.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sticker-item' + (s.favorited ? ' favorited' : '');
+    const img = document.createElement('img');
+    img.src = s.url;
+    img.alt = 'Figurinha';
+    const favBtn = document.createElement('button');
+    favBtn.className = 'sticker-fav-btn';
+    favBtn.textContent = s.favorited ? '⭐' : '☆';
+    favBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch('/api/stickers/' + s.id + '/favorite', { method: 'PUT' });
+      const data = await res.json();
+      const idx = stickerList.findIndex(x => x.id === s.id);
+      if (idx !== -1) stickerList[idx] = data.sticker;
+      renderStickerGrid();
+    });
+    item.appendChild(img);
+    item.appendChild(favBtn);
+    item.addEventListener('click', () => sendSticker(s));
+    grid.appendChild(item);
+  });
+}
+
+function sendSticker(sticker) {
+  if (!activeChat || !socket) return;
+  const chatId = activeChatId();
+  const to = activeChat.data.id;
+  socket.emit('send_message', { to, text: '🎭 Figurinha', url: sticker.url, chatId, type: 'sticker' });
+  document.getElementById('sticker-panel').classList.add('hidden');
+}
+
+// ─── INIT MEDIA FEATURES ──────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  setupAudioRecorder();
+  setupMediaUpload();
+  setupStickers();
+});

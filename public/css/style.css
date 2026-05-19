@@ -589,3 +589,60 @@ echo "CSS done"
   height: 1px;
   background: var(--border);
 }
+
+/* ─── INPUT ROW ─────────────────────────────────────────── */
+.input-row { display: flex; align-items: flex-end; gap: 6px; padding: 8px 12px; }
+.message-input-area { padding: 0; }
+
+/* ─── AUDIO RECORDER ────────────────────────────────────── */
+.audio-recorder { padding: 10px 14px; background: var(--bg-secondary); }
+.audio-recorder-inner { display: flex; align-items: center; gap: 10px; background: var(--bg-tertiary); border-radius: 24px; padding: 10px 14px; }
+.audio-waveform { display: flex; align-items: center; gap: 3px; flex: 1; height: 32px; }
+.audio-waveform span { display: inline-block; width: 4px; border-radius: 4px; background: var(--accent); animation: wave 1s ease-in-out infinite; }
+.audio-waveform span:nth-child(1) { height: 10px; animation-delay: 0s; }
+.audio-waveform span:nth-child(2) { height: 20px; animation-delay: 0.1s; }
+.audio-waveform span:nth-child(3) { height: 28px; animation-delay: 0.2s; }
+.audio-waveform span:nth-child(4) { height: 18px; animation-delay: 0.3s; }
+.audio-waveform span:nth-child(5) { height: 24px; animation-delay: 0.4s; }
+.audio-waveform span:nth-child(6) { height: 14px; animation-delay: 0.5s; }
+.audio-waveform span:nth-child(7) { height: 30px; animation-delay: 0.6s; }
+.audio-waveform span:nth-child(8) { height: 20px; animation-delay: 0.7s; }
+.audio-waveform span:nth-child(9) { height: 16px; animation-delay: 0.8s; }
+.audio-waveform span:nth-child(10) { height: 22px; animation-delay: 0.9s; }
+@keyframes wave { 0%, 100% { transform: scaleY(0.5); opacity: 0.5; } 50% { transform: scaleY(1); opacity: 1; } }
+.audio-timer { font-size: 14px; font-weight: 600; color: var(--accent); min-width: 36px; }
+.audio-cancel-btn { background: #ef4444; border: none; color: white; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+.audio-send-btn { background: var(--accent); border: none; color: white; border-radius: 50%; width: 36px; height: 36px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.audio-record-btn.recording { color: #ef4444; animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* ─── MEDIA MESSAGES ────────────────────────────────────── */
+.msg-image { max-width: 260px; border-radius: 12px; cursor: pointer; display: block; margin-bottom: 4px; }
+.msg-video { max-width: 280px; border-radius: 12px; display: block; margin-bottom: 4px; }
+.msg-audio-player { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.08); border-radius: 20px; padding: 8px 14px; min-width: 200px; }
+.msg-audio-player button { background: var(--accent); border: none; color: white; border-radius: 50%; width: 34px; height: 34px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.msg-audio-progress { flex: 1; height: 4px; background: rgba(0,0,0,0.15); border-radius: 2px; cursor: pointer; position: relative; }
+.msg-audio-bar { height: 100%; background: var(--accent); border-radius: 2px; width: 0%; transition: width 0.1s; }
+.msg-audio-time { font-size: 11px; color: var(--text-secondary); min-width: 32px; text-align: right; }
+
+/* ─── STICKER PANEL ─────────────────────────────────────── */
+.sticker-panel { background: var(--bg-secondary); border-top: 1px solid var(--border); padding: 10px; max-height: 220px; display: flex; flex-direction: column; gap: 8px; }
+.sticker-panel-header { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 14px; }
+.sticker-upload-btn { background: var(--accent); color: white; border: none; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.sticker-tabs { display: flex; gap: 6px; }
+.sticker-tab { background: none; border: 1px solid var(--border); border-radius: 12px; padding: 3px 12px; font-size: 12px; cursor: pointer; color: var(--text-secondary); }
+.sticker-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+.sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; overflow-y: auto; flex: 1; }
+.sticker-item { position: relative; border-radius: 10px; overflow: hidden; cursor: pointer; aspect-ratio: 1; border: 2px solid transparent; transition: border-color 0.2s; }
+.sticker-item:hover { border-color: var(--accent); }
+.sticker-item img { width: 100%; height: 100%; object-fit: cover; }
+.sticker-fav-btn { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 50%; width: 20px; height: 20px; font-size: 10px; cursor: pointer; display: none; }
+.sticker-item:hover .sticker-fav-btn { display: flex; align-items: center; justify-content: center; }
+.sticker-item.favorited .sticker-fav-btn { display: flex; align-items: center; justify-content: center; background: rgba(251,191,36,0.8); }
+.msg-sticker { max-width: 140px; border-radius: 12px; cursor: pointer; }
+.sticker-toggle-btn { font-size: 18px; }
+
+/* ─── MEDIA PREVIEW ─────────────────────────────────────── */
+.media-preview-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+.media-preview-overlay img, .media-preview-overlay video { max-width: 95vw; max-height: 85vh; border-radius: 8px; }
+.media-preview-close { position: absolute; top: 16px; right: 16px; background: rgba(255,255,255,0.2); border: none; color: white; width: 40px; height: 40px; border-radius: 50%; font-size: 20px; cursor: pointer; }
