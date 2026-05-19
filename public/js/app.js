@@ -255,8 +255,14 @@ function initSocket() {
     }
   });
 
-  socket.on('friend_request', (req) => {
-    showToast('👥 ' + req.fromName + ' quer ser seu amigo!');
+socket.on('friend_request', (req) => {
+    showToast('👥 ' + req.fromName + ' quer ser seu amigo! Clique no 🔔 para aceitar.');
+    const badge = document.getElementById('req-badge');
+    if (badge) {
+      const current = parseInt(badge.textContent) || 0;
+      badge.textContent = current + 1;
+      badge.classList.remove('hidden');
+    }
     loadFriendRequests();
   });
 
