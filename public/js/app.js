@@ -266,9 +266,10 @@ socket.on('friend_request', (req) => {
     loadFriendRequests();
   });
 
-  socket.on('pending_requests', ({ count }) => {
+socket.on('pending_requests', ({ count }) => {
     const badge = document.getElementById('req-badge');
-    badge.textContent = count; badge.classList.remove('hidden');
+    if (badge) { badge.textContent = count; badge.classList.remove('hidden'); }
+    loadFriendRequests();
   });
 
   socket.on('friend_accepted', (data) => {
@@ -354,13 +355,16 @@ async function loadGroups() {
 async function loadFriendRequests() {
   try {
     const res = await fetch('/api/friends/requests');
+    if (!res.ok) return;
     const data = await res.json();
     const requests = data.requests || [];
     const badge = document.getElementById('req-badge');
-    if (requests.length > 0) { badge.textContent = requests.length; badge.classList.remove('hidden'); }
-    else badge.classList.add('hidden');
+    if (badge) {
+      if (requests.length > 0) { badge.textContent = requests.length; badge.classList.remove('hidden'); }
+      else { badge.classList.add('hidden'); }
+    }
     renderRequestsList(requests);
-  } catch {}
+  } catch(e) { console.error('[requests] erro:', e); }
 }
 
 // ─── CHAT LIST ────────────────────────────────────────────
