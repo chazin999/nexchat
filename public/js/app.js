@@ -263,6 +263,17 @@ socket.on('friend_request', (req) => {
       badge.textContent = current + 1;
       badge.classList.remove('hidden');
     }
+    const list = document.getElementById('requests-list');
+    if (list) {
+      const empty = list.querySelector('.empty-state-sm');
+      if (empty) empty.remove();
+      const div = document.createElement('div');
+      div.className = 'request-item';
+      div.innerHTML = '<img src="' + (req.fromAvatar || '') + '" class="avatar avatar-sm" /><div class="request-info"><strong>' + req.fromName + '</strong><span>' + req.fromCode + '</span></div><div class="request-actions"><button class="btn-accept">✓ Aceitar</button><button class="btn-reject">✕ Recusar</button></div>';
+      div.querySelector('.btn-accept').addEventListener('click', function() { acceptRequest(req.id); });
+      div.querySelector('.btn-reject').addEventListener('click', function() { rejectRequest(req.id); });
+      list.appendChild(div);
+    }
     loadFriendRequests();
   });
 
