@@ -164,6 +164,7 @@ async function doRegister() {
   const errEl = document.getElementById('reg-error');
   errEl.classList.add('hidden');
   if (!name || !email || !password) return showError(errEl, 'Preencha todos os campos');
+  if (!email.toLowerCase().endsWith('@gmail.com')) return showError(errEl, 'Use um email Gmail (@gmail.com)');
   if (password.length < 6) return showError(errEl, 'Senha mínima de 6 caracteres');
   const btn = document.getElementById('register-btn');
   btn.textContent = 'Criando...'; btn.disabled = true;
@@ -205,6 +206,7 @@ function showApp() {
   setupContextMenu();
   setupBackBtn();
   setupMemberPopupClose();
+  setupSwipeToReply();
 }
 
 function renderSidebarHeader() {
@@ -220,6 +222,8 @@ function initSocket() {
   socket.on('connect', () => { socket.emit('auth', { userId: currentUser.id }); });
 
   socket.on('message', (msg) => {
+    if (!window._currentMessages) window._currentMessages = [];
+    window._currentMessages.push(msg);
     if (activeChat && msg.chatId === activeChatId()) {
       appendMessage(msg);
       scrollToBottom();
@@ -256,13 +260,21 @@ function initSocket() {
   });
 
   socket.on('friend_request', (req) => {
-    showToast('👥 ' + req.fromName + ' quer ser seu amigo!');
+    showToast('👥 ' + req.fromName + ' quer ser seu amigo! Clique no 🔔 para aceitar.');
+    // Atualiza badge imediatamente sem esperar o fetch
+    const badge = document.getElementById('req-badge');
+    if (badge) {
+      const current = parseInt(badge.textContent) || 0;
+      badge.textContent = current + 1;
+      badge.classList.remove('hidden');
+    }
     loadFriendRequests();
   });
 
   socket.on('pending_requests', ({ count }) => {
     const badge = document.getElementById('req-badge');
-    badge.textContent = count; badge.classList.remove('hidden');
+    if (badge) { badge.textContent = count; badge.classList.remove('hidden'); }
+    loadFriendRequests();
   });
 
   socket.on('friend_accepted', (data) => {
@@ -348,13 +360,16 @@ async function loadGroups() {
 async function loadFriendRequests() {
   try {
     const res = await fetch('/api/friends/requests');
+    if (!res.ok) { console.error('[loadFriendRequests] status:', res.status); return; }
     const data = await res.json();
     const requests = data.requests || [];
     const badge = document.getElementById('req-badge');
-    if (requests.length > 0) { badge.textContent = requests.length; badge.classList.remove('hidden'); }
-    else badge.classList.add('hidden');
+    if (badge) {
+      if (requests.length > 0) { badge.textContent = requests.length; badge.classList.remove('hidden'); }
+      else { badge.textContent = '0'; badge.classList.add('hidden'); }
+    }
     renderRequestsList(requests);
-  } catch {}
+  } catch(e) { console.error('[loadFriendRequests] erro:', e); }
 }
 
 // ─── CHAT LIST ────────────────────────────────────────────
@@ -504,6 +519,7 @@ async function loadMessages() {
 
 // ─── RENDER MESSAGES ──────────────────────────────────────
 function renderMessages(messages) {
+  window._currentMessages = messages;
   const list = document.getElementById('messages-list');
   list.innerHTML = '';
   if (messages.length === 0) {
@@ -570,10 +586,37 @@ function buildMessageEl(msg, isOut, showAvatar) {
     bubble.appendChild(rp);
   }
 
-  const textEl = document.createElement('div');
-  textEl.className = 'msg-text';
-  textEl.textContent = msg.text;
-  bubble.appendChild(textEl);
+  if (msg.type === 'image') {
+    const img = document.createElement('img');
+    img.className = 'msg-image';
+    img.src = msg.url;
+    img.alt = 'Imagem';
+    img.addEventListener('click', () => openMediaPreview('image', msg.url));
+    bubble.appendChild(img);
+  } else if (msg.type === 'video') {
+    const vid = document.createElement('video');
+    vid.className = 'msg-video';
+    vid.src = msg.url;
+    vid.controls = true;
+    vid.preload = 'metadata';
+    bubble.appendChild(vid);
+  } else if (msg.type === 'audio') {
+    bubble.appendChild(buildAudioPlayer(msg.url));
+  } else if (msg.type === 'sticker') {
+    const img = document.createElement('img');
+    img.className = 'msg-sticker';
+    img.src = msg.url;
+    img.alt = 'Figurinha';
+    img.addEventListener('click', () => openMediaPreview('image', msg.url));
+    img.addEventListener('contextmenu', (e) => { e.preventDefault(); showStickerContextMenu(e, msg.url); });
+    img.addEventListener('touchstart', makeLongPress((e) => showStickerContextMenu(e, msg.url)), { passive: true });
+    bubble.appendChild(img);
+  } else {
+    const textEl = document.createElement('div');
+    textEl.className = 'msg-text';
+    textEl.textContent = msg.text;
+    bubble.appendChild(textEl);
+  }
 
   const footer = document.createElement('div');
   footer.className = 'msg-footer';
@@ -758,12 +801,18 @@ function setupContextMenu() {
     if (contextMenuMsg) navigator.clipboard.writeText(contextMenuMsg.text).then(() => showToast('📋 Copiado!'));
     menu.classList.add('hidden');
   });
-  document.getElementById('ctx-delete').addEventListener('click', async function() {
+  async function deleteMsg(scope) {
     if (!contextMenuMsg) return; menu.classList.add('hidden');
-    await fetch('/api/messages/' + activeChatId() + '/' + contextMenuMsg.id, { method: 'DELETE' });
-    const el = document.querySelector('[data-msg-id="' + contextMenuMsg.id + '"]');
-    if (el) { const grp = el.closest('.message-group'); if (grp) grp.remove(); }
-  });
+    const res = await fetch('/api/messages/' + activeChatId() + '/' + contextMenuMsg.id + '?scope=' + scope, { method: 'DELETE' });
+    if (res.ok && scope === 'me') {
+      const el = document.querySelector('[data-msg-id="' + contextMenuMsg.id + '"]');
+      if (el) { const grp = el.closest('.message-group'); if (grp) { grp.style.opacity='0'; grp.style.transition='opacity .2s'; setTimeout(()=>grp.remove(),200); } }
+    }
+  }
+  const deleteMe = document.getElementById('ctx-delete-me');
+  const deleteAll = document.getElementById('ctx-delete-all');
+  if (deleteMe) deleteMe.addEventListener('click', () => deleteMsg('me'));
+  if (deleteAll) deleteAll.addEventListener('click', () => deleteMsg('all'));
   document.querySelectorAll('.react-opt').forEach(function(opt) {
     opt.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -776,12 +825,16 @@ function setupContextMenu() {
 function showContextMenu(e, msg, isOut) {
   contextMenuMsg = msg;
   const menu = document.getElementById('context-menu');
-  document.getElementById('ctx-delete').classList.toggle('hidden', !isOut);
+  const deleteMe = document.getElementById('ctx-delete-me');
+  const deleteAll = document.getElementById('ctx-delete-all');
+  // Everyone can delete for themselves; only sender can delete for all
+  if (deleteMe) deleteMe.classList.remove('hidden');
+  if (deleteAll) deleteAll.classList.toggle('hidden', !isOut);
   const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
   const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
   menu._triggerRect = { x, y };
-  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 180) + 'px';
+  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 220) + 'px';
   menu.classList.remove('hidden');
   if (e.stopPropagation) e.stopPropagation();
 }
@@ -1315,12 +1368,28 @@ function showMemberPopup(e, member, groupData, callerIsAdmin, callerIsOwner) {
   popup.classList.remove('hidden');
 }
 
-// ─── BACK BUTTON ──────────────────────────────────────────
+// ─── BACK BUTTON + SWIPE ──────────────────────────────────
+function goBackToList() {
+  document.getElementById('app').classList.remove('chat-open');
+  activeChat = null;
+}
+
 function setupBackBtn() {
-  document.getElementById('back-btn').addEventListener('click', function() {
-    document.getElementById('app').classList.remove('chat-open');
-    activeChat = null;
-  });
+  document.getElementById('back-btn').addEventListener('click', goBackToList);
+
+  // Swipe right to go back
+  const main = document.querySelector('main') || document.getElementById('app');
+  let touchStartX = 0, touchStartY = 0;
+  main.addEventListener('touchstart', function(e) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  main.addEventListener('touchend', function(e) {
+    if (!activeChat) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+    if (dx > 80 && dy < 60) goBackToList();
+  }, { passive: true });
 }
 
 // ─── THEME TOGGLE ─────────────────────────────────────────
@@ -2130,4 +2199,393 @@ function showToast(msg) {
   toast.classList.remove('hidden');
   clearTimeout(toast._timer);
   toast._timer = setTimeout(function() { toast.classList.add('hidden'); }, 3000);
+}
+
+// ─── AUDIO PLAYER ─────────────────────────────────────────
+function buildAudioPlayer(url) {
+  const audio = new Audio(url);
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-audio-player';
+
+  const playBtn = document.createElement('button');
+  playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+
+  const progress = document.createElement('div');
+  progress.className = 'msg-audio-progress';
+  const bar = document.createElement('div');
+  bar.className = 'msg-audio-bar';
+  progress.appendChild(bar);
+
+  const timeEl = document.createElement('span');
+  timeEl.className = 'msg-audio-time';
+  timeEl.textContent = '0:00';
+
+  let playing = false;
+  playBtn.addEventListener('click', () => {
+    if (playing) { audio.pause(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'; playing = false; }
+    else { audio.play(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'; playing = true; }
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    const pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
+    bar.style.width = pct + '%';
+    const s = Math.floor(audio.currentTime);
+    timeEl.textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+  });
+
+  audio.addEventListener('ended', () => {
+    playing = false;
+    playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+    bar.style.width = '0%';
+  });
+
+  progress.addEventListener('click', (e) => {
+    const r = progress.getBoundingClientRect();
+    const pct = (e.clientX - r.left) / r.width;
+    audio.currentTime = audio.duration * pct;
+  });
+
+  wrap.appendChild(playBtn);
+  wrap.appendChild(progress);
+  wrap.appendChild(timeEl);
+  return wrap;
+}
+
+// ─── MEDIA PREVIEW ────────────────────────────────────────
+function openMediaPreview(type, url) {
+  const ov = document.createElement('div');
+  ov.className = 'media-preview-overlay';
+  const close = document.createElement('button');
+  close.className = 'media-preview-close';
+  close.textContent = '×';
+  close.addEventListener('click', () => ov.remove());
+  ov.appendChild(close);
+  if (type === 'image') {
+    const img = document.createElement('img');
+    img.src = url;
+    ov.appendChild(img);
+  }
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
+// ─── AUDIO RECORDING ──────────────────────────────────────
+let mediaRecorder = null, audioChunks = [], audioTimerInterval = null, audioSeconds = 0;
+
+function setupAudioRecorder() {
+  const recordBtn = document.getElementById('audio-record-btn');
+  const recorderUI = document.getElementById('audio-recorder');
+  const inputRow = document.getElementById('input-row');
+  const cancelBtn = document.getElementById('audio-cancel-btn');
+  const sendBtn = document.getElementById('audio-send-btn');
+  const timerEl = document.getElementById('audio-timer');
+
+  if (!recordBtn) return;
+
+  recordBtn.addEventListener('click', async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      audioSeconds = 0;
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.start();
+      recordBtn.classList.add('recording');
+      recorderUI.classList.remove('hidden');
+      inputRow.classList.add('hidden');
+      audioTimerInterval = setInterval(() => {
+        audioSeconds++;
+        timerEl.textContent = Math.floor(audioSeconds/60) + ':' + String(audioSeconds%60).padStart(2,'0');
+      }, 1000);
+    } catch(e) {
+      showToast('❌ Permissão de microfone negada');
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    if (mediaRecorder) { mediaRecorder.stream.getTracks().forEach(t => t.stop()); mediaRecorder = null; }
+    clearInterval(audioTimerInterval);
+    recorderUI.classList.add('hidden');
+    inputRow.classList.remove('hidden');
+    document.getElementById('audio-record-btn').classList.remove('recording');
+  });
+
+  sendBtn.addEventListener('click', () => {
+    if (!mediaRecorder) return;
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const fd = new FormData();
+      fd.append('media', blob, 'audio.webm');
+      try {
+        const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.url && activeChat && socket) {
+          const chatId = activeChatId();
+          const to = activeChat.data.id;
+          socket.emit('send_message', { to, text: '🎤 Áudio', url: data.url, chatId, type: 'audio' });
+        }
+      } catch(e) { showToast('❌ Erro ao enviar áudio'); }
+      recorderUI.classList.add('hidden');
+      inputRow.classList.remove('hidden');
+      document.getElementById('audio-record-btn').classList.remove('recording');
+    };
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    mediaRecorder.stop();
+    clearInterval(audioTimerInterval);
+  });
+}
+
+// ─── MEDIA UPLOAD (FOTO/VÍDEO) ────────────────────────────
+function setupMediaUpload() {
+  const btn = document.getElementById('media-btn');
+  const input = document.getElementById('media-file-input');
+  if (!btn || !input) return;
+
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { showToast('❌ Arquivo muito grande (máx 50MB)'); return; }
+    const fd = new FormData();
+    fd.append('media', file);
+    showToast('📤 Enviando...');
+    try {
+      const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.url && activeChat && socket) {
+        const chatId = activeChatId();
+        const to = activeChat.data.id;
+        const type = data.type || (file.type.startsWith('video') ? 'video' : 'image');
+        socket.emit('send_message', { to, text: type === 'video' ? '🎥 Vídeo' : '📷 Foto', url: data.url, chatId, type });
+      }
+    } catch(e) { showToast('❌ Erro ao enviar mídia'); }
+    input.value = '';
+  });
+}
+
+// ─── STICKERS ─────────────────────────────────────────────
+let stickerList = [];
+let stickerTab = 'all';
+
+async function setupStickers() {
+  const toggleBtn = document.getElementById('sticker-toggle-btn');
+  const panel = document.getElementById('sticker-panel');
+  const uploadBtn = document.getElementById('sticker-upload-btn');
+  const fileInput = document.getElementById('sticker-file-input');
+  if (!toggleBtn) return;
+
+  toggleBtn.addEventListener('click', () => {
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) loadStickers();
+  });
+
+  document.querySelectorAll('.sticker-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.sticker-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      stickerTab = tab.dataset.tab;
+      renderStickerGrid();
+    });
+  });
+
+  uploadBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append('sticker', file);
+    try {
+      const res = await fetch('/api/stickers', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.sticker) { stickerList.push(data.sticker); renderStickerGrid(); showToast('🎭 Figurinha adicionada!'); }
+    } catch(e) { showToast('❌ Erro ao adicionar figurinha'); }
+    fileInput.value = '';
+  });
+}
+
+async function loadStickers() {
+  try {
+    const res = await fetch('/api/stickers');
+    const data = await res.json();
+    stickerList = data.stickers || [];
+    renderStickerGrid();
+  } catch(e) {}
+}
+
+function renderStickerGrid() {
+  const grid = document.getElementById('sticker-grid'); if (!grid) return;
+  const list = stickerTab === 'fav' ? stickerList.filter(s => s.favorited) : stickerList;
+  if (list.length === 0) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:20px;font-size:13px">' + (stickerTab === 'fav' ? 'Nenhuma favorita ainda' : 'Nenhuma figurinha. Adicione uma!') + '</div>';
+    return;
+  }
+  grid.innerHTML = '';
+  list.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sticker-item' + (s.favorited ? ' favorited' : '');
+    const img = document.createElement('img');
+    img.src = s.url;
+    img.alt = 'Figurinha';
+    const favBtn = document.createElement('button');
+    favBtn.className = 'sticker-fav-btn';
+    favBtn.textContent = s.favorited ? '⭐' : '☆';
+    favBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch('/api/stickers/' + s.id + '/favorite', { method: 'PUT' });
+      const data = await res.json();
+      const idx = stickerList.findIndex(x => x.id === s.id);
+      if (idx !== -1) stickerList[idx] = data.sticker;
+      renderStickerGrid();
+    });
+    item.appendChild(img);
+    item.appendChild(favBtn);
+    item.addEventListener('click', () => sendSticker(s));
+    grid.appendChild(item);
+  });
+}
+
+function sendSticker(sticker) {
+  if (!activeChat || !socket) return;
+  const chatId = activeChatId();
+  const to = activeChat.data.id;
+  socket.emit('send_message', { to, text: '🎭 Figurinha', url: sticker.url, chatId, type: 'sticker' });
+  document.getElementById('sticker-panel').classList.add('hidden');
+}
+
+// ─── INIT MEDIA FEATURES ──────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  setupAudioRecorder();
+  setupMediaUpload();
+  setupStickers();
+});
+
+// ─── SWIPE TO REPLY ───────────────────────────────────────
+function setupSwipeToReply() {
+  const messagesList = document.getElementById('messages-list');
+  if (!messagesList) return;
+
+  let startX = 0, startY = 0, currentEl = null, swipeIndicator = null;
+
+  messagesList.addEventListener('touchstart', function(e) {
+    const bubble = e.target.closest('.message-bubble');
+    if (!bubble) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    currentEl = bubble;
+  }, { passive: true });
+
+  messagesList.addEventListener('touchmove', function(e) {
+    if (!currentEl) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = Math.abs(e.touches[0].clientY - startY);
+    if (dy > 30) { currentEl = null; return; }
+
+    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
+    // out messages swipe left (negative dx), in messages swipe right (positive dx)
+    const validSwipe = isOut ? dx < -20 : dx > 20;
+    if (!validSwipe) return;
+
+    const travel = Math.min(Math.abs(dx), 70);
+    currentEl.style.transform = isOut ? `translateX(-${travel}px)` : `translateX(${travel}px)`;
+    currentEl.style.transition = 'none';
+
+    // Show reply indicator
+    if (!swipeIndicator) {
+      swipeIndicator = document.createElement('div');
+      swipeIndicator.style.cssText = 'position:absolute;background:var(--accent);color:white;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;pointer-events:none;z-index:10;opacity:0;transition:opacity .1s';
+      swipeIndicator.textContent = '↩';
+      currentEl.style.position = 'relative';
+      currentEl.appendChild(swipeIndicator);
+    }
+    swipeIndicator.style.opacity = Math.min(travel / 60, 1).toString();
+    if (isOut) { swipeIndicator.style.left = '4px'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
+    else { swipeIndicator.style.right = '4px'; swipeIndicator.style.left = 'auto'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
+  }, { passive: true });
+
+  messagesList.addEventListener('touchend', function(e) {
+    if (!currentEl) return;
+    const dx = e.changedTouches[0].clientX - startX;
+    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
+    const travel = Math.abs(dx);
+
+    currentEl.style.transition = 'transform .2s ease';
+    currentEl.style.transform = '';
+
+    if (swipeIndicator) { swipeIndicator.remove(); swipeIndicator = null; }
+
+    if (travel > 60) {
+      const msgId = currentEl.dataset.msgId;
+      // Find msg in DOM messages list
+      const allMsgs = window._currentMessages || [];
+      const msg = allMsgs.find(m => m.id === msgId);
+      if (msg) setReply(msg);
+    }
+    currentEl = null;
+  }, { passive: true });
+}
+
+// Store messages globally for swipe reply lookup
+const _origRenderMessages = typeof renderMessages === 'function' ? renderMessages : null;
+
+// ─── STICKER CONTEXT MENU ─────────────────────────────────
+function showStickerContextMenu(e, stickerUrl) {
+  // Remove existing
+  const existing = document.getElementById('sticker-ctx-menu');
+  if (existing) existing.remove();
+
+  const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 100);
+  const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 100);
+
+  const menu = document.createElement('div');
+  menu.id = 'sticker-ctx-menu';
+  menu.className = 'sticker-ctx-menu';
+  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 120) + 'px';
+
+  // Check if already saved
+  const alreadySaved = stickerList.some(s => s.url === stickerUrl);
+  const alreadyFav = stickerList.find(s => s.url === stickerUrl)?.favorited;
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'sticker-ctx-item';
+  saveBtn.innerHTML = (alreadySaved ? '✅' : '💾') + ' ' + (alreadySaved ? 'Já salva' : 'Salvar figurinha');
+  saveBtn.addEventListener('click', async () => {
+    menu.remove();
+    if (alreadySaved) { showToast('Figurinha já está salva!'); return; }
+    // Download and re-upload as sticker
+    try {
+      const res = await fetch(stickerUrl);
+      const blob = await res.blob();
+      const fd = new FormData();
+      fd.append('sticker', blob, 'sticker.png');
+      const r = await fetch('/api/stickers', { method: 'POST', body: fd });
+      const data = await r.json();
+      if (data.sticker) { stickerList.push(data.sticker); showToast('🎭 Figurinha salva!'); }
+    } catch(e) { showToast('❌ Erro ao salvar figurinha'); }
+  });
+
+  const favBtn = document.createElement('button');
+  favBtn.className = 'sticker-ctx-item';
+  const existingSticker = stickerList.find(s => s.url === stickerUrl);
+  favBtn.innerHTML = (alreadyFav ? '⭐' : '☆') + ' ' + (alreadyFav ? 'Desfavoritar' : 'Favoritar');
+  favBtn.addEventListener('click', async () => {
+    menu.remove();
+    if (!existingSticker) { showToast('Salve a figurinha primeiro!'); return; }
+    const r = await fetch('/api/stickers/' + existingSticker.id + '/favorite', { method: 'PUT' });
+    const data = await r.json();
+    const idx = stickerList.findIndex(s => s.id === existingSticker.id);
+    if (idx !== -1) stickerList[idx] = data.sticker;
+    showToast(data.sticker.favorited ? '⭐ Favoritada!' : 'Desfavoritada');
+  });
+
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'sticker-ctx-item';
+  viewBtn.innerHTML = '🔍 Ver figurinha';
+  viewBtn.addEventListener('click', () => { menu.remove(); openMediaPreview('image', stickerUrl); });
+
+  menu.appendChild(saveBtn);
+  menu.appendChild(favBtn);
+  menu.appendChild(viewBtn);
+  document.body.appendChild(menu);
+
+  setTimeout(() => {
+    document.addEventListener('click', () => menu.remove(), { once: true });
+  }, 100);
 }
