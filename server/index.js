@@ -12,6 +12,37 @@ const { MongoClient } = require('mongodb');
 let nodemailer;
 try { nodemailer = require('nodemailer'); } catch(e) { nodemailer = null; }
 
+// ─── CLOUDINARY SETUP ────────────────────────────────────
+let cloudinary = null;
+try {
+  cloudinary = require('cloudinary').v2;
+  if (process.env.CLOUDINARY_CLOUD_NAME) {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+    });
+    console.log('[Cloudinary] ✅ Configurado');
+  } else {
+    console.log('[Cloudinary] Não configurado, usando disco local');
+    cloudinary = null;
+  }
+} catch(e) { cloudinary = null; }
+
+async function uploadToCloud(filePath, folder = 'nexchat') {
+  if (!cloudinary) return null;
+  try {
+    const result = await cloudinary.uploader.upload(filePath, {
+      folder,
+      resource_type: 'auto',
+    });
+    return result.secure_url;
+  } catch(e) {
+    console.error('[Cloudinary] Upload error:', e.message);
+    return null;
+  }
+}
+
 // ─── MONGO SETUP ─────────────────────────────────────────
 const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI || '';
 let mongoClient, mdb;
@@ -157,7 +188,23 @@ app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/uploads')) return next();
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
-app.use(session({ secret: process.env.SESSION_SECRET || 'nexchat-secret-2024', resave: false, saveUninitialized: false, cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 } }));
+// ─── SESSION (persistente via MongoDB) ───────────────────
+let MongoStore;
+try { MongoStore = require('connect-mongo'); } catch(e) { MongoStore = null; }
+
+function buildSession() {
+  const sessionOpts = {
+    secret: process.env.SESSION_SECRET || 'nexchat-secret-2024',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' }
+  };
+  if (MongoStore && MONGO_URI) {
+    sessionOpts.store = MongoStore.create({ mongoUrl: MONGO_URI, collectionName: 'sessions', ttl: 30 * 24 * 60 * 60 });
+  }
+  return session(sessionOpts);
+}
+app.use(buildSession());
 
 // ─── UTILS ─────────────────────────────────────────────────
 function generateFriendCode() {
@@ -245,16 +292,18 @@ app.put('/api/profile', (req, res) => {
 });
 
 // ─── MEDIA UPLOAD ───────────────────────────────────────────
-app.post('/api/upload-media', upload.single('media'), (req, res) => {
+app.post('/api/upload-media', upload.single('media'), async (req, res) => {
   const userId = req.session.userId;
   if (!userId) return res.status(401).json({ error: 'Não autenticado' });
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
-  const url = '/uploads/' + req.file.filename;
   const mimetype = req.file.mimetype;
   let type = 'file';
   if (mimetype.startsWith('image/')) type = 'image';
   else if (mimetype.startsWith('video/')) type = 'video';
   else if (mimetype.startsWith('audio/')) type = 'audio';
+  let url = '/uploads/' + req.file.filename;
+  const cloudUrl = await uploadToCloud(req.file.path, 'nexchat/media');
+  if (cloudUrl) { url = cloudUrl; try { fs.unlinkSync(req.file.path); } catch(e) {} }
   res.json({ url, type });
 });
 
@@ -265,7 +314,19 @@ app.post('/api/stickers', upload.single('sticker'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
   const user = cache.users[userId];
   if (!user.stickers) user.stickers = [];
-  const sticker = { id: uuidv4(), url: '/uploads/' + req.file.filename, favorited: false, createdAt: new Date().toISOString() };
+  // Check duplicate by hash
+  const fileBuffer = fs.readFileSync(req.file.path);
+  const crypto = require('crypto');
+  const hash = crypto.createHash('md5').update(fileBuffer).digest('hex');
+  const duplicate = user.stickers.find(s => s.hash === hash);
+  if (duplicate) {
+    try { fs.unlinkSync(req.file.path); } catch(e) {}
+    return res.json({ sticker: duplicate });
+  }
+  let url = '/uploads/' + req.file.filename;
+  const cloudUrl = await uploadToCloud(req.file.path, 'nexchat/stickers');
+  if (cloudUrl) { url = cloudUrl; try { fs.unlinkSync(req.file.path); } catch(e) {} }
+  const sticker = { id: uuidv4(), url, hash, favorited: false, createdAt: new Date().toISOString() };
   user.stickers.push(sticker);
   saveUser(user);
   res.json({ sticker });
@@ -298,13 +359,15 @@ app.delete('/api/stickers/:stickerId', (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/avatar', upload.single('avatar'), (req, res) => {
+app.post('/api/avatar', upload.single('avatar'), async (req, res) => {
   const userId = req.session.userId;
   if (!userId) return res.status(401).json({ error: 'Não autenticado' });
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
   const user = cache.users[userId];
-  if (user.avatar) { const old = path.join(uploadsDir, path.basename(user.avatar)); if (fs.existsSync(old)) fs.unlinkSync(old); }
-  user.avatar = `/uploads/${req.file.filename}`;
+  let avatarUrl = `/uploads/${req.file.filename}`;
+  const cloudUrl = await uploadToCloud(req.file.path, 'nexchat/avatars');
+  if (cloudUrl) { avatarUrl = cloudUrl; try { fs.unlinkSync(req.file.path); } catch(e) {} }
+  user.avatar = avatarUrl;
   saveUser(user);
   io.emit('user_updated', { userId, name: user.name, bio: user.bio, status: user.status, avatar: user.avatar });
   res.json({ avatar: user.avatar });
