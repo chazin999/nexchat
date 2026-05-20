@@ -198,11 +198,9 @@ function buildSession() {
   };
   try {
     if (MONGO_URI) {
-      const MongoStore = require('connect-mongo');
-      const store = typeof MongoStore.create === 'function'
-        ? MongoStore.create({ mongoUrl: MONGO_URI, collectionName: 'sessions', ttl: 30 * 24 * 60 * 60 })
-        : new MongoStore({ mongoUrl: MONGO_URI, collectionName: 'sessions', ttl: 30 * 24 * 60 * 60 });
-      sessionOpts.store = store;
+      const cm = require('connect-mongo');
+      const MongoStore = cm.default || cm;
+      sessionOpts.store = MongoStore.create({ mongoUrl: MONGO_URI, collectionName: 'sessions', ttl: 30 * 24 * 60 * 60 });
       console.log('[Session] ✅ MongoDB store ativo');
     }
   } catch(e) {
