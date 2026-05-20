@@ -1445,9 +1445,7 @@ async function openGroupModal(groupData) {
     dissolveAllBtn.className = 'btn-danger';
     dissolveAllBtn.textContent = '💥 Dissolver o grupo (remover todos)';
     dissolveAllBtn.addEventListener('click', async function() {
-      if (!confirm('⚠️ Isso dissolverá o grupo e removerá TODOS os membros. Não pode ser desfeito!
-
-Tem certeza?')) return;
+      if (!confirm('⚠️ Isso dissolverá o grupo e removerá TODOS os membros. Não pode ser desfeito!\n\nTem certeza?')) return;
       const res = await fetch('/api/groups/' + groupData.id + '/dissolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1500,9 +1498,7 @@ Tem certeza?')) return;
       const newAdminId = adminSelect.value;
       if (!newAdminId) return showToast('Selecione um membro para ser o novo dono');
       const newAdmin = members.find(m => m.id === newAdminId);
-      if (!confirm('Transferir o grupo para ' + (newAdmin ? newAdmin.name : 'este membro') + ' e sair?
-
-Os outros membros continuarão no grupo.')) return;
+      if (!confirm('Transferir o grupo para ' + (newAdmin ? newAdmin.name : 'este membro') + ' e sair?\n\nOs outros membros continuarão no grupo.')) return;
       const res = await fetch('/api/groups/' + groupData.id + '/dissolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
