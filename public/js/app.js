@@ -2844,61 +2844,132 @@ function setupSwipeToReply() {
   const messagesList = document.getElementById('messages-list');
   if (!messagesList) return;
 
-  let startX = 0, startY = 0, currentEl = null, swipeIndicator = null;
+  const THRESHOLD = 65; // px to trigger reply
+  const MAX_DRAG  = 80; // max px the bubble slides
+
+  let startX = 0, startY = 0, lockAxis = null;
+  let currentBubble = null, indicator = null, triggered = false;
+
+  function resetBubble() {
+    if (!currentBubble) return;
+    currentBubble.style.transition = 'transform 0.25s cubic-bezier(.25,.46,.45,.94)';
+    currentBubble.style.transform  = '';
+    if (indicator) {
+      indicator.style.transform = indicator.style.transform.replace(/scale\([^)]+\)/, '') + ' scale(0)';
+      indicator.style.opacity = '0';
+      const ind = indicator;
+      setTimeout(() => ind.remove(), 250);
+      indicator = null;
+    }
+    currentBubble = null;
+    lockAxis = null;
+    triggered = false;
+  }
 
   messagesList.addEventListener('touchstart', function(e) {
+    if (e.touches.length !== 1) return;
     const bubble = e.target.closest('.message-bubble');
     if (!bubble) return;
+    // don't start if tapping a button/link
+    if (e.target.closest('button,a')) return;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
-    currentEl = bubble;
+    currentBubble = bubble;
+    lockAxis = null;
+    triggered = false;
+    currentBubble.style.transition = 'none';
   }, { passive: true });
 
   messagesList.addEventListener('touchmove', function(e) {
-    if (!currentEl) return;
+    if (!currentBubble) return;
     const dx = e.touches[0].clientX - startX;
-    const dy = Math.abs(e.touches[0].clientY - startY);
-    if (dy > 30) { currentEl = null; return; }
+    const dy = e.touches[0].clientY - startY;
 
-    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
-    // out messages swipe left (negative dx), in messages swipe right (positive dx)
-    const validSwipe = isOut ? dx < -20 : dx > 20;
-    if (!validSwipe) return;
-
-    const travel = Math.min(Math.abs(dx), 70);
-    currentEl.style.transform = isOut ? `translateX(-${travel}px)` : `translateX(${travel}px)`;
-    currentEl.style.transition = 'none';
-
-    // Show reply indicator
-    if (!swipeIndicator) {
-      swipeIndicator = document.createElement('div');
-      swipeIndicator.style.cssText = 'position:absolute;background:var(--accent);color:white;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;pointer-events:none;z-index:10;opacity:0;transition:opacity .1s';
-      swipeIndicator.textContent = '↩';
-      currentEl.style.position = 'relative';
-      currentEl.appendChild(swipeIndicator);
+    // Determine axis lock on first meaningful move
+    if (!lockAxis) {
+      if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+      lockAxis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
     }
-    swipeIndicator.style.opacity = Math.min(travel / 60, 1).toString();
-    if (isOut) { swipeIndicator.style.left = '4px'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
-    else { swipeIndicator.style.right = '4px'; swipeIndicator.style.left = 'auto'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
+    if (lockAxis === 'y') { resetBubble(); return; }
+
+    const isOut = !!currentBubble.closest('.message-group.out');
+    // My messages (out) → drag LEFT (dx < 0) to reply
+    // Other's messages (in) → drag RIGHT (dx > 0) to reply
+    const correctDir = isOut ? dx < 0 : dx > 0;
+    if (!correctDir) return;
+
+    const travel = Math.min(Math.abs(dx), MAX_DRAG);
+    const eased  = travel * (1 - travel / (MAX_DRAG * 2.5)); // rubber-band feel
+    currentBubble.style.transform = isOut
+      ? `translateX(-${eased}px)`
+      : `translateX(${eased}px)`;
+
+    const progress = Math.min(travel / THRESHOLD, 1);
+
+    // Create indicator on first move
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.style.cssText = [
+        'position:absolute',
+        'top:50%',
+        isOut ? 'left:-40px' : 'right:-40px',
+        'transform:translateY(-50%) scale(0)',
+        'background:var(--accent)',
+        'color:white',
+        'border-radius:50%',
+        'width:30px',
+        'height:30px',
+        'display:flex',
+        'align-items:center',
+        'justify-content:center',
+        'font-size:15px',
+        'pointer-events:none',
+        'z-index:20',
+        'opacity:0',
+        'transition:transform 0.15s ease, opacity 0.15s ease',
+        'box-shadow:0 2px 8px rgba(0,0,0,0.25)'
+      ].join(';');
+      indicator.textContent = '↩';
+      currentBubble.style.position = 'relative';
+      currentBubble.style.overflow = 'visible';
+      currentBubble.appendChild(indicator);
+      // trigger reflow so transition fires
+      indicator.getBoundingClientRect();
+    }
+
+    indicator.style.opacity  = progress.toString();
+    const sc = 0.6 + progress * 0.5;
+    const baseTransform = 'translateY(-50%)';
+    indicator.style.transform = `${baseTransform} scale(${sc})`;
+
+    // Haptic + colour shift at threshold
+    if (travel >= THRESHOLD && !triggered) {
+      triggered = true;
+      indicator.style.background = '#22c55e';
+      indicator.style.transform  = `${baseTransform} scale(1.2)`;
+      if (navigator.vibrate) navigator.vibrate(30);
+    } else if (travel < THRESHOLD && triggered) {
+      triggered = false;
+      indicator.style.background = 'var(--accent)';
+    }
   }, { passive: true });
 
   messagesList.addEventListener('touchend', function(e) {
-    if (!currentEl) return;
+    if (!currentBubble) return;
     const dx = e.changedTouches[0].clientX - startX;
-    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
+    const isOut = !!currentBubble.closest('.message-group.out');
     const travel = Math.abs(dx);
+    const bubble = currentBubble;
 
-    currentEl.style.transition = 'transform .2s ease';
-    currentEl.style.transform = '';
+    resetBubble();
 
-    if (swipeIndicator) { swipeIndicator.remove(); swipeIndicator = null; }
-
-    if (travel > 60) {
-      const msg = currentEl._msgData;
+    if (travel >= THRESHOLD) {
+      const msg = bubble._msgData;
       if (msg) setReply(msg);
     }
-    currentEl = null;
   }, { passive: true });
+
+  messagesList.addEventListener('touchcancel', resetBubble, { passive: true });
 }
 
 // Store messages globally for swipe reply lookup
