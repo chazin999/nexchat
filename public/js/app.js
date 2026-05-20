@@ -19,6 +19,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTheme();
   loadWallpaper();
   await checkSession();
+  // Register Service Worker for push notifications
+  if ('serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('/sw.js');
+    } catch(e) { console.log('SW registration failed:', e); }
+  }
 });
 
 async function checkSession() {
@@ -229,8 +235,22 @@ function initSocket() {
       scrollToBottom();
       socket.emit('message_read', { chatId: msg.chatId, messageIds: [msg.id] });
     } else {
-      const preview = msg.text.length > 50 ? msg.text.substring(0, 50) + '...' : msg.text;
+      const preview = (msg.text||'').length > 50 ? (msg.text||'').substring(0, 50) + '...' : (msg.text||'Mensagem');
       showToast('💬 ' + msg.fromName + ': ' + preview);
+      // Push notification for background messages
+      if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+        try {
+          const n = new Notification('NexChat - ' + msg.fromName, {
+            body: preview,
+            icon: '/favicon.ico',
+            tag: 'nexchat-msg-' + msg.chatId,
+            renotify: true
+          });
+          n.onclick = () => { window.focus(); n.close(); };
+        } catch(e){}
+      }
+      // In-app notification banner
+      showInAppNotification(msg);
     }
     updateChatListPreview(msg);
   });
@@ -323,6 +343,40 @@ function initSocket() {
       }
     }
   });
+
+  socket.on('group_dissolved', ({ groupId, groupName }) => {
+    groupsList = groupsList.filter(g => g.id !== groupId);
+    if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupId) {
+      activeChat = null;
+      document.getElementById('chat-header').classList.add('hidden');
+      document.getElementById('messages-container').classList.add('hidden');
+      document.getElementById('message-input-area').classList.add('hidden');
+      document.getElementById('no-chat-selected').style.display = '';
+      document.getElementById('app').classList.remove('chat-open');
+    }
+    refreshChatList();
+    showToast('⚠️ O grupo "' + (groupName||'') + '" foi dissolvido pelo dono');
+    try { closeModal('group-modal'); } catch(e){}
+  });
+
+  socket.on('group_dissolved_exit', ({ groupId }) => {
+    groupsList = groupsList.filter(g => g.id !== groupId);
+    if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupId) {
+      activeChat = null;
+      document.getElementById('chat-header').classList.add('hidden');
+      document.getElementById('messages-container').classList.add('hidden');
+      document.getElementById('message-input-area').classList.add('hidden');
+      document.getElementById('no-chat-selected').style.display = '';
+      document.getElementById('app').classList.remove('chat-open');
+    }
+    refreshChatList();
+    try { closeModal('group-modal'); } catch(e){}
+  });
+
+  // Request push notification permission
+  if ('Notification' in window && Notification.permission === 'default') {
+    setTimeout(() => Notification.requestPermission(), 2000);
+  }
 }
 
 function activeChatId() {
@@ -383,6 +437,50 @@ function setupSidebarEvents() {
     });
   });
   document.getElementById('search-input').addEventListener('input', () => refreshChatList());
+
+  // Join group by code button
+  const joinCodeBtn = document.getElementById('join-group-code-btn');
+  if (joinCodeBtn) {
+    joinCodeBtn.addEventListener('click', function() {
+      document.getElementById('join-group-modal').classList.remove('hidden');
+      setTimeout(() => { const inp = document.getElementById('join-group-code-input'); if (inp) inp.focus(); }, 100);
+    });
+  }
+  const joinSubmit = document.getElementById('join-group-submit-btn');
+  if (joinSubmit) {
+    joinSubmit.addEventListener('click', doJoinGroupByCode);
+  }
+  const joinInput = document.getElementById('join-group-code-input');
+  if (joinInput) {
+    joinInput.addEventListener('keydown', e => { if (e.key === 'Enter') doJoinGroupByCode(); });
+  }
+}
+
+async function doJoinGroupByCode() {
+  const input = document.getElementById('join-group-code-input');
+  const msgEl = document.getElementById('join-group-msg');
+  if (!input || !msgEl) return;
+  const code = input.value.trim();
+  if (!code) { msgEl.textContent = 'Digite um código ou link'; msgEl.classList.remove('hidden'); return; }
+  msgEl.classList.add('hidden');
+  const btn = document.getElementById('join-group-submit-btn');
+  btn.textContent = 'Entrando...'; btn.disabled = true;
+  try {
+    const res = await fetch('/api/groups/join-by-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    const data = await res.json();
+    if (res.ok && data.group) {
+      closeModal('join-group-modal');
+      input.value = '';
+      showToast('✅ Você entrou no grupo ' + data.group.name + '!');
+      await loadGroups();
+      socket.emit('join_group', { groupId: data.group.id });
+      openChat('group', data.group);
+    } else {
+      msgEl.textContent = data.error || 'Grupo não encontrado';
+      msgEl.classList.remove('hidden');
+    }
+  } catch { msgEl.textContent = 'Erro de conexão'; msgEl.classList.remove('hidden'); }
+  finally { btn.textContent = 'Entrar no Grupo'; btn.disabled = false; }
 }
 
 function refreshChatList() {
@@ -614,7 +712,31 @@ function buildMessageEl(msg, isOut, showAvatar) {
   } else {
     const textEl = document.createElement('div');
     textEl.className = 'msg-text';
-    textEl.textContent = msg.text;
+    const raw = msg.text || '';
+    // Linkify URLs
+    const urlRegex = /(https?:\/\/[^\s<>"']+)/gi;
+    if (urlRegex.test(raw)) {
+      urlRegex.lastIndex = 0;
+      const parts = raw.split(urlRegex);
+      parts.forEach((part, i) => {
+        if (urlRegex.test(part)) {
+          urlRegex.lastIndex = 0;
+          const a = document.createElement('a');
+          a.href = part;
+          a.textContent = part;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.className = 'msg-link';
+          a.addEventListener('click', e => { e.stopPropagation(); });
+          textEl.appendChild(a);
+        } else {
+          if (part) textEl.appendChild(document.createTextNode(part));
+        }
+        urlRegex.lastIndex = 0;
+      });
+    } else {
+      textEl.textContent = raw;
+    }
     bubble.appendChild(textEl);
   }
 
@@ -808,12 +930,19 @@ function setupContextMenu() {
 
   async function deleteMsg(scope) {
     if (!contextMenuMsg) return;
+    const msgId = contextMenuMsg.id;
     closeMenu();
     try {
-      const res = await fetch('/api/messages/' + activeChatId() + '/' + contextMenuMsg.id + '?scope=' + scope, { method: 'DELETE' });
-      if (res.ok && scope === 'me') {
-        const el = document.querySelector('[data-msg-id="' + contextMenuMsg.id + '"]');
-        if (el) { const grp = el.closest('.message-group'); if (grp) { grp.style.opacity='0'; grp.style.transition='opacity .2s'; setTimeout(()=>grp.remove(),200); } }
+      const res = await fetch('/api/messages/' + activeChatId() + '/' + msgId + '?scope=' + scope, { method: 'DELETE' });
+      if (res.ok) {
+        // Remove from UI for both 'me' and 'all'
+        const el = document.querySelector('[data-msg-id="' + msgId + '"]');
+        if (el) {
+          const grp = el.closest('.message-group');
+          el.style.opacity='0'; el.style.transform='scale(0.9)'; el.style.transition='all .2s';
+          setTimeout(() => { if (grp) grp.remove(); else el.remove(); }, 200);
+        }
+        if (scope === 'all') showToast('🗑️ Mensagem apagada para todos');
       }
     } catch(err) { showToast('Erro ao apagar mensagem'); }
   }
@@ -1274,7 +1403,7 @@ async function openGroupModal(groupData) {
   membersSection.appendChild(membersList);
   body.appendChild(membersSection);
 
-  // Leave group button
+  // Leave group button (non-owners)
   if (!isOwner) {
     const leaveBtn = document.createElement('button');
     leaveBtn.className = 'btn-danger';
@@ -1298,6 +1427,108 @@ async function openGroupModal(groupData) {
       }
     });
     body.appendChild(leaveBtn);
+  }
+
+  // Dissolve group (owner only)
+  if (isOwner) {
+    const dissolveSection = document.createElement('div');
+    dissolveSection.className = 'dissolve-section';
+    dissolveSection.innerHTML = '<div class="section-title" style="color:var(--danger)">⚠️ Dissolver Grupo</div>';
+
+    const dissolveDesc = document.createElement('p');
+    dissolveDesc.className = 'dissolve-desc';
+    dissolveDesc.textContent = 'Como dono, você pode dissolver o grupo ou transferir a propriedade e sair.';
+    dissolveSection.appendChild(dissolveDesc);
+
+    // Option 1: Dissolve all
+    const dissolveAllBtn = document.createElement('button');
+    dissolveAllBtn.className = 'btn-danger';
+    dissolveAllBtn.textContent = '💥 Dissolver o grupo (remover todos)';
+    dissolveAllBtn.addEventListener('click', async function() {
+      if (!confirm('⚠️ Isso dissolverá o grupo e removerá TODOS os membros. Não pode ser desfeito!
+
+Tem certeza?')) return;
+      const res = await fetch('/api/groups/' + groupData.id + '/dissolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'all' })
+      });
+      if (res.ok) {
+        closeModal('group-modal');
+        groupsList = groupsList.filter(g => g.id !== groupData.id);
+        if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupData.id) {
+          activeChat = null;
+          document.getElementById('chat-header').classList.add('hidden');
+          document.getElementById('messages-container').classList.add('hidden');
+          document.getElementById('message-input-area').classList.add('hidden');
+          document.getElementById('no-chat-selected').style.display = '';
+          document.getElementById('app').classList.remove('chat-open');
+        }
+        refreshChatList();
+        showToast('💥 Grupo dissolvido');
+      } else {
+        const d = await res.json();
+        showToast(d.error || 'Erro ao dissolver grupo');
+      }
+    });
+    dissolveSection.appendChild(dissolveAllBtn);
+
+    // Option 2: Transfer + exit
+    const transferSection = document.createElement('div');
+    transferSection.className = 'dissolve-transfer';
+    transferSection.innerHTML = '<div style="font-size:12px;color:var(--text-muted);margin:8px 0 4px">Ou transfira para um membro e saia:</div>';
+
+    const adminSelect = document.createElement('select');
+    adminSelect.className = 'group-edit-input';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'Selecione um membro para ser o novo dono...';
+    adminSelect.appendChild(defaultOpt);
+    members.filter(m => m.id !== currentUser.id).forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      adminSelect.appendChild(opt);
+    });
+    transferSection.appendChild(adminSelect);
+
+    const transferBtn = document.createElement('button');
+    transferBtn.className = 'btn-secondary btn-sm';
+    transferBtn.style.marginTop = '6px';
+    transferBtn.textContent = '🔄 Transferir e sair do grupo';
+    transferBtn.addEventListener('click', async function() {
+      const newAdminId = adminSelect.value;
+      if (!newAdminId) return showToast('Selecione um membro para ser o novo dono');
+      const newAdmin = members.find(m => m.id === newAdminId);
+      if (!confirm('Transferir o grupo para ' + (newAdmin ? newAdmin.name : 'este membro') + ' e sair?
+
+Os outros membros continuarão no grupo.')) return;
+      const res = await fetch('/api/groups/' + groupData.id + '/dissolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'transfer', newAdminId })
+      });
+      if (res.ok) {
+        closeModal('group-modal');
+        groupsList = groupsList.filter(g => g.id !== groupData.id);
+        if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupData.id) {
+          activeChat = null;
+          document.getElementById('chat-header').classList.add('hidden');
+          document.getElementById('messages-container').classList.add('hidden');
+          document.getElementById('message-input-area').classList.add('hidden');
+          document.getElementById('no-chat-selected').style.display = '';
+          document.getElementById('app').classList.remove('chat-open');
+        }
+        refreshChatList();
+        showToast('✅ Grupo transferido. Você saiu.');
+      } else {
+        const d = await res.json();
+        showToast(d.error || 'Erro ao transferir grupo');
+      }
+    });
+    transferSection.appendChild(transferBtn);
+    dissolveSection.appendChild(transferSection);
+    body.appendChild(dissolveSection);
   }
 
   document.getElementById('group-modal').classList.remove('hidden');
@@ -2031,6 +2262,13 @@ function setWallpaperOpacity(value, save) {
   const label = document.getElementById('wallpaper-opacity-value');
   if (input) input.value = Math.round(n * 100);
   if (label) label.textContent = Math.round(n * 100) + '%';
+  // Apply opacity to wallpapered containers via filter: opacity
+  [document.getElementById('messages-container'), document.querySelector('.chat-list')].forEach(el => {
+    if (el && el.classList.contains('wallpaper-applied')) {
+      el.style.backgroundBlendMode = 'normal';
+      // Opacity handled by messages-list background overlay
+    }
+  });
 }
 
 function setupWallpaperModal() {
@@ -2139,11 +2377,31 @@ function applyWallpaperCss(cssBackground, scope) {
   if ((scope === 'messages' || scope === 'both') && msgContainer) {
     msgContainer.classList.add('wallpaper-applied');
     msgContainer.style.setProperty('--nexchat-wallpaper', cssBackground);
+    // Apply opacity via actual CSS filter on messages-list, not background
+    const opacity = getWallpaperOpacity() / 100;
+    msgContainer.style.setProperty('--wp-bg-val', cssBackground);
+    // Use background directly with opacity
+    if (cssBackground.startsWith('url(')) {
+      msgContainer.style.backgroundImage = cssBackground;
+      msgContainer.style.backgroundSize = 'cover';
+      msgContainer.style.backgroundPosition = 'center';
+      msgContainer.style.backgroundRepeat = 'no-repeat';
+    } else {
+      msgContainer.style.backgroundImage = cssBackground;
+    }
     if (chatArea) chatArea.classList.add('has-wallpaper');
   }
   if ((scope === 'contacts' || scope === 'both') && sidebarList) {
     sidebarList.classList.add('wallpaper-applied');
     sidebarList.style.setProperty('--nexchat-wallpaper', cssBackground);
+    if (cssBackground.startsWith('url(')) {
+      sidebarList.style.backgroundImage = cssBackground;
+      sidebarList.style.backgroundSize = 'cover';
+      sidebarList.style.backgroundPosition = 'center';
+      sidebarList.style.backgroundRepeat = 'no-repeat';
+    } else {
+      sidebarList.style.backgroundImage = cssBackground;
+    }
   }
 }
 
@@ -2232,13 +2490,48 @@ function showToast(msg) {
   toast._timer = setTimeout(function() { toast.classList.add('hidden'); }, 3000);
 }
 
+let _notifTimer = null;
+function showInAppNotification(msg) {
+  // Don't show if the chat is currently open
+  if (activeChat && msg.chatId === activeChatId()) return;
+  const existing = document.querySelector('.notif-banner');
+  if (existing) existing.remove();
+  clearTimeout(_notifTimer);
+  const banner = document.createElement('div');
+  banner.className = 'notif-banner';
+  const avatar = msg.fromAvatar || DEFAULT_AVATAR(msg.fromName || 'U');
+  const preview = (msg.text || 'Mensagem').substring(0, 60);
+  banner.innerHTML = '<img src="' + escHtml(avatar) + '" onerror="this.src=\'' + DEFAULT_AVATAR(msg.fromName||'U') + '\'" /><div class="notif-banner-text"><div class="notif-banner-name">' + escHtml(msg.fromName || 'Usuário') + '</div><div class="notif-banner-msg">' + escHtml(preview) + '</div></div>';
+  banner.addEventListener('click', () => {
+    banner.remove();
+    // Open the relevant chat
+    if (msg.chatId && msg.chatId.startsWith('group_')) {
+      const gId = msg.chatId.replace('group_', '');
+      const g = groupsList.find(x => x.id === gId);
+      if (g) openChat('group', g);
+    } else {
+      const f = friendsList.find(x => x.id === msg.from);
+      if (f) openChat('friend', f);
+    }
+  });
+  document.body.appendChild(banner);
+  _notifTimer = setTimeout(() => { if (banner.parentNode) { banner.style.opacity='0'; banner.style.transition='opacity .3s'; setTimeout(()=>banner.remove(),300); } }, 5000);
+}
+
 // ─── AUDIO PLAYER ─────────────────────────────────────────
 function buildAudioPlayer(url) {
-  const audio = new Audio(url);
+  // Ensure absolute URL
+  const audioUrl = url && !url.startsWith('http') ? (window.location.origin + url) : url;
+  const audio = new Audio();
+  audio.preload = 'metadata';
+  audio.crossOrigin = 'anonymous';
+  // Set src after creation to avoid auto-load issues
+  audio.src = audioUrl;
   const wrap = document.createElement('div');
   wrap.className = 'msg-audio-player';
 
   const playBtn = document.createElement('button');
+  playBtn.className = 'audio-play-btn';
   playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
 
   const progress = document.createElement('div');
@@ -2252,9 +2545,24 @@ function buildAudioPlayer(url) {
   timeEl.textContent = '0:00';
 
   let playing = false;
-  playBtn.addEventListener('click', () => {
-    if (playing) { audio.pause(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'; playing = false; }
-    else { audio.play(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'; playing = true; }
+  playBtn.addEventListener('click', async () => {
+    try {
+      if (playing) {
+        audio.pause();
+        playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+        playing = false;
+      } else {
+        // Pause all other audio players
+        document.querySelectorAll('.msg-audio-player audio').forEach(a => { if (a !== audio && !a.paused) a.pause(); });
+        document.querySelectorAll('.audio-play-btn').forEach(b => { if (b !== playBtn) b.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'; });
+        await audio.play();
+        playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+        playing = true;
+      }
+    } catch(e) {
+      console.error('Audio play error:', e);
+      showToast('❌ Erro ao reproduzir áudio');
+    }
   });
 
   audio.addEventListener('timeupdate', () => {
@@ -2276,6 +2584,9 @@ function buildAudioPlayer(url) {
     audio.currentTime = audio.duration * pct;
   });
 
+  // Append hidden audio to wrap (needed for some browsers)
+  audio.style.display = 'none';
+  wrap.appendChild(audio);
   wrap.appendChild(playBtn);
   wrap.appendChild(progress);
   wrap.appendChild(timeEl);

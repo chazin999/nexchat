@@ -378,9 +378,39 @@ img { display: block; }
 .wallpaper-opacity-row strong { min-width: 44px; text-align: right; color: var(--text-secondary); font-size: 13px; }
 .wallpaper-help { display: block; margin-top: 6px; color: var(--text-muted); line-height: 1.45; }
 .messages-container.wallpaper-applied,
-.chat-list.wallpaper-applied { background: var(--bg-primary) !important; overflow: hidden auto; }
+.chat-list.wallpaper-applied { overflow: hidden auto; }
+.messages-container.wallpaper-applied { isolation: isolate; }
+.chat-area.has-wallpaper { isolation: isolate; position: relative; }
+/* Wallpaper uses a fixed pseudo-element clipped to the chat area */
 .messages-container.wallpaper-applied::before,
-.chat-list.wallpaper-applied::before { content: ""; position: absolute; inset: 0; background: var(--nexchat-wallpaper); background-size: cover; background-position: center center; background-repeat: no-repeat; background-attachment: fixed; opacity: var(--nexchat-wallpaper-opacity, .38); pointer-events: none; z-index: 0; }
+.chat-list.wallpaper-applied::before {
+  content: "";
+  position: sticky;
+  display: block;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+/* The actual background is on the container, using background-attachment:local so it doesn't scroll */
+.messages-container.wallpaper-applied {
+  background-image: var(--nexchat-wallpaper) !important;
+  background-size: cover !important;
+  background-position: center center !important;
+  background-repeat: no-repeat !important;
+  background-attachment: scroll !important;
+  background-color: var(--bg-primary) !important;
+}
+.chat-list.wallpaper-applied {
+  background-image: var(--nexchat-wallpaper) !important;
+  background-size: cover !important;
+  background-position: center center !important;
+  background-repeat: no-repeat !important;
+  background-attachment: scroll !important;
+  background-color: var(--bg-primary) !important;
+}
 .chat-list.wallpaper-applied > * { position: relative; z-index: 1; }
 .chat-list.wallpaper-applied .chat-item { background: color-mix(in srgb, var(--bg-secondary) 70%, transparent); backdrop-filter: blur(10px); }
 .chat-list.wallpaper-applied .chat-item:hover,
@@ -661,3 +691,36 @@ echo "CSS done"
 .delete-scope-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 14px; background: none; border: none; cursor: pointer; font-size: 14px; color: var(--text-primary); border-radius: 10px; }
 .delete-scope-btn:hover { background: var(--bg-tertiary); }
 .delete-scope-btn.danger { color: #ef4444; }
+
+/* ── Link in messages ── */
+.msg-link { color: var(--accent); text-decoration: underline; word-break: break-all; cursor: pointer; }
+.msg-link:hover { opacity: .8; }
+
+/* ── Dissolve group section ── */
+.dissolve-section { border: 1px solid rgba(239,68,68,.3); border-radius: var(--radius-sm); padding: 14px; background: rgba(239,68,68,.05); margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+.dissolve-desc { font-size: 12px; color: var(--text-secondary); margin: 0; }
+.dissolve-transfer { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid rgba(239,68,68,.15); }
+
+/* ── Join group by code btn ── */
+#join-group-code-btn { position: relative; }
+
+/* ── Audio play button ── */
+.audio-play-btn { background: var(--accent); border: none; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: white; flex-shrink: 0; transition: var(--transition); }
+.audio-play-btn:hover { opacity: .85; transform: scale(1.05); }
+
+/* ── Notification banner ── */
+.notif-banner { position: fixed; top: 16px; right: 16px; background: var(--bg-secondary); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 12px 16px; box-shadow: var(--shadow-lg); z-index: 9999; max-width: 320px; display: flex; align-items: center; gap: 10px; animation: slideDown .25s ease; cursor: pointer; }
+@keyframes slideDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.notif-banner img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.notif-banner-text { flex: 1; }
+.notif-banner-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
+.notif-banner-msg { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 230px; }
+
+/* Wallpaper opacity layer - the messages-list creates a semi-transparent cover */
+.messages-container.wallpaper-applied .messages-list {
+  position: relative;
+  z-index: 1;
+}
+.messages-container.wallpaper-applied .messages-list::before {
+  display: none;
+}

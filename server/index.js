@@ -82,12 +82,25 @@ async function loadFromMongo() {
   try {
     // Carregar users
     const users = await mdb.collection('users').find({}).toArray();
-    users.forEach(u => {
+    for (const u of users) {
       const { _id, ...user } = u;
+      // Fix old users without friendCode
+      if (!user.friendCode) {
+        user.friendCode = generateFriendCode();
+        await mdb.collection('users').updateOne({ id: user.id }, { $set: { friendCode: user.friendCode } });
+        console.log('[Migration] Generated friendCode for user:', user.email);
+      }
+      // Fix old users without required fields
+      if (!user.customNames) user.customNames = {};
+      if (!user.friends) user.friends = [];
+      if (!user.groups) user.groups = [];
+      if (!user.recoveryMethods) user.recoveryMethods = ['email'];
+      if (!user.recoveryEmails) user.recoveryEmails = [];
       cache.users[user.id] = user;
       cache.usersByEmail[user.email] = user.id;
-      cache.usersByCode[user.friendCode] = user.id;
-    });
+      if (user.friendCode) cache.usersByCode[user.friendCode] = user.id;
+      if (!cache.friendRequests[user.id]) cache.friendRequests[user.id] = [];
+    }
 
     // Carregar groups
     const groups = await mdb.collection('groups').find({}).toArray();
@@ -265,10 +278,20 @@ app.post('/api/logout', (req, res) => {
   req.session.destroy(); res.json({ success: true });
 });
 
-app.get('/api/me', (req, res) => {
+app.get('/api/me', async (req, res) => {
   const userId = req.session.userId;
   if (!userId || !cache.users[userId]) return res.status(401).json({ error: 'Não autenticado' });
-  res.json({ user: sanitizeUser(cache.users[userId]) });
+  const user = cache.users[userId];
+  // Auto-fix old users without friendCode
+  if (!user.friendCode) {
+    user.friendCode = generateFriendCode();
+    cache.usersByCode[user.friendCode] = user.id;
+    await saveUser(user);
+  }
+  if (!user.customNames) user.customNames = {};
+  if (!user.friends) user.friends = [];
+  if (!user.groups) user.groups = [];
+  res.json({ user: sanitizeUser(user) });
 });
 
 app.put('/api/profile', (req, res) => {
@@ -570,6 +593,62 @@ app.post('/api/groups/:groupId/leave', (req, res) => {
   saveGroup(group); saveUser(user);
   io.to(`group_${groupId}`).emit('group_updated', { ...sanitizeGroup(group), memberDetails: group.members.map(mId => sanitizeUser(cache.users[mId])).filter(Boolean) });
   res.json({ success: true });
+});
+
+// ─── DISSOLVER GRUPO ─────────────────────────────────────────────
+app.post('/api/groups/:groupId/dissolve', (req, res) => {
+  const userId = req.session.userId; if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const { groupId } = req.params; const group = cache.groups[groupId];
+  if (!group) return res.status(404).json({ error: 'Grupo não encontrado' });
+  if (group.createdBy !== userId) return res.status(403).json({ error: 'Somente o dono pode dissolver o grupo' });
+  const { mode, newAdminId } = req.body;
+  // mode: 'all' = dissolver e remover todos; 'transfer' = transferir para novo admin e sair
+  if (mode === 'transfer' && newAdminId) {
+    // transferir dono, sair do grupo
+    if (!group.members.includes(newAdminId)) return res.status(400).json({ error: 'Membro não encontrado' });
+    group.createdBy = newAdminId;
+    if (!group.admins.includes(newAdminId)) group.admins.push(newAdminId);
+    group.admins = group.admins.filter(id => id !== userId);
+    group.members = group.members.filter(id => id !== userId);
+    const user = cache.users[userId]; if (user) user.groups = (user.groups || []).filter(id => id !== groupId);
+    saveGroup(group); saveUser(user);
+    const updated = { ...sanitizeGroup(group), memberDetails: group.members.map(mId => sanitizeUser(cache.users[mId])).filter(Boolean) };
+    io.to(`group_${groupId}`).emit('group_updated', updated);
+    io.to(`user_${userId}`).emit('group_dissolved_exit', { groupId });
+    res.json({ success: true, mode: 'transfer' });
+  } else {
+    // dissolve completamente - remover todos os membros
+    const members = [...group.members];
+    members.forEach(mId => {
+      const u = cache.users[mId]; if (u) u.groups = (u.groups || []).filter(id => id !== groupId); saveUser(u);
+    });
+    // Notificar todos
+    io.to(`group_${groupId}`).emit('group_dissolved', { groupId, groupName: group.name });
+    // Remover grupo
+    delete cache.groups[groupId];
+    if (group.inviteCode) delete cache.groupInvites[group.inviteCode];
+    delete cache.messages[`group_${groupId}`];
+    if (mdb) { mdb.collection('groups').deleteOne({ id: groupId }).catch(console.error); mdb.collection('messages').deleteMany({ chatId: `group_${groupId}` }).catch(console.error); }
+    res.json({ success: true, mode: 'all' });
+  }
+});
+
+// ─── ENTRAR POR CÓDIGO (modal na sidebar) ──────────────────────
+app.post('/api/groups/join-by-code', (req, res) => {
+  const userId = req.session.userId; if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const code = normalizeGroupInviteCode(req.body.code || '');
+  const groupId = cache.groupInvites[code] || (cache.groups[code] ? code : null);
+  const group = groupId ? cache.groups[groupId] : null;
+  if (!group) return res.status(404).json({ error: 'Grupo não encontrado. Verifique o código.' });
+  if (group.banned && group.banned.includes(userId)) return res.status(403).json({ error: 'Você está banido deste grupo.' });
+  const user = cache.users[userId]; if (!user.groups) user.groups = [];
+  if (!group.members.includes(userId)) group.members.push(userId);
+  if (!user.groups.includes(group.id)) user.groups.push(group.id);
+  saveUser(user); saveGroup(group);
+  const updated = { ...sanitizeGroup(group), memberDetails: group.members.map(mId => sanitizeUser(cache.users[mId])).filter(Boolean) };
+  io.to(`user_${userId}`).emit('group_created', updated);
+  io.to(`group_${group.id}`).emit('group_updated', updated);
+  res.json({ success: true, group: updated });
 });
 
 // ─── MODERAÇÃO ───────────────────────────────────────────────
