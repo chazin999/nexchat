@@ -197,10 +197,6 @@ app.use(express.static(path.join(__dirname, '../public')));
 app.use('/uploads', express.static(uploadsDir));
 
 // Catch-all: serve index.html para rotas não reconhecidas
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/uploads')) return next();
-  res.sendFile(path.join(__dirname, '../public/index.html'));
-});
 // ─── SESSION (persistente via MongoDB) ───────────────────
 app.use(session({
   secret: process.env.SESSION_SECRET || 'nexchat-secret-2024',
@@ -208,6 +204,11 @@ app.use(session({
   saveUninitialized: false,
   cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' }
 }));
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/uploads')) return next();
+  res.sendFile(path.join(__dirname, '../public/index.html'));
+});
 
 // ─── UTILS ─────────────────────────────────────────────────
 function generateFriendCode() {
