@@ -784,11 +784,19 @@ function setupEmojiPicker() {
 function setupContextMenu() {
   const menu = document.getElementById('context-menu');
   const reactPicker = document.getElementById('reaction-picker');
+  let menuLocked = false; // prevent close right after open
 
-  // Fecha menu ao clicar fora (apenas click, não touchstart para não interferir com touch nos botões)
+  function closeMenus() {
+    if (menuLocked) return;
+    menu.classList.add('hidden');
+    reactPicker.classList.add('hidden');
+  }
+
+  document.addEventListener('touchstart', function(e) {
+    if (!menu.contains(e.target) && !reactPicker.contains(e.target)) closeMenus();
+  }, { passive: true });
   document.addEventListener('click', function(e) {
-    if (!menu.contains(e.target)) menu.classList.add('hidden');
-    if (!reactPicker.contains(e.target)) reactPicker.classList.add('hidden');
+    if (!menu.contains(e.target) && !reactPicker.contains(e.target)) closeMenus();
   });
 
   async function deleteMsg(scope) {
@@ -803,53 +811,66 @@ function setupContextMenu() {
     } catch(err) { showToast('Erro ao apagar mensagem'); }
   }
 
-  function bindBtn(id, fn) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    // Use both click and touchend for maximum compatibility
-    let touched = false;
-    el.addEventListener('touchend', function(e) {
+  function action(fn) {
+    return function(e) {
       e.stopPropagation();
-      touched = true;
-      setTimeout(() => { touched = false; }, 400);
+      e.preventDefault();
+      menu.classList.add('hidden');
       fn();
-    }, { passive: true });
-    el.addEventListener('click', function(e) {
-      e.stopPropagation();
-      if (!touched) fn();
-    });
+    };
   }
 
-  bindBtn('ctx-react', function() {
-    menu.classList.add('hidden');
+  const btnReact = document.getElementById('ctx-react');
+  const btnReply = document.getElementById('ctx-reply');
+  const btnCopy = document.getElementById('ctx-copy');
+  const btnDelMe = document.getElementById('ctx-delete-me');
+  const btnDelAll = document.getElementById('ctx-delete-all');
+
+  function addAction(btn, fn) {
+    if (!btn) return;
+    const handler = action(fn);
+    btn.addEventListener('touchend', handler, { passive: false });
+    btn.addEventListener('click', handler);
+  }
+
+  addAction(btnReact, function() {
     const rect = menu._triggerRect || { x: 100, y: 200 };
     reactPicker.style.left = Math.min(rect.x, window.innerWidth - 280) + 'px';
     reactPicker.style.top = Math.max(rect.y - 70, 10) + 'px';
     reactPicker.classList.remove('hidden');
   });
 
-  bindBtn('ctx-reply', function() {
+  addAction(btnReply, function() {
     if (contextMenuMsg) setReply(contextMenuMsg);
-    menu.classList.add('hidden');
   });
 
-  bindBtn('ctx-copy', function() {
+  addAction(btnCopy, function() {
     if (contextMenuMsg && contextMenuMsg.text) {
       navigator.clipboard.writeText(contextMenuMsg.text).then(() => showToast('📋 Copiado!'));
     }
-    menu.classList.add('hidden');
   });
 
-  bindBtn('ctx-delete-me', () => deleteMsg('me'));
-  bindBtn('ctx-delete-all', () => deleteMsg('all'));
+  addAction(btnDelMe, () => deleteMsg('me'));
+  addAction(btnDelAll, () => deleteMsg('all'));
 
   document.querySelectorAll('.react-opt').forEach(function(opt) {
+    opt.addEventListener('touchend', function(e) {
+      e.stopPropagation(); e.preventDefault();
+      if (contextMenuMsg) sendReaction(activeChatId(), contextMenuMsg.id, opt.dataset.emoji);
+      reactPicker.classList.add('hidden');
+    }, { passive: false });
     opt.addEventListener('click', function(e) {
       e.stopPropagation();
       if (contextMenuMsg) sendReaction(activeChatId(), contextMenuMsg.id, opt.dataset.emoji);
       reactPicker.classList.add('hidden');
     });
   });
+
+  // Expose lock for showContextMenu
+  window._lockMenuClose = function() {
+    menuLocked = true;
+    setTimeout(() => { menuLocked = false; }, 300);
+  };
 }
 
 function showContextMenu(e, msg, isOut) {
@@ -866,6 +887,7 @@ function showContextMenu(e, msg, isOut) {
   menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - 220) + 'px';
   menu.classList.remove('hidden');
+  if (window._lockMenuClose) window._lockMenuClose();
   if (e.stopPropagation) e.stopPropagation();
 }
 
