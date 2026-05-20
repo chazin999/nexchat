@@ -189,22 +189,12 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 // ─── SESSION (persistente via MongoDB) ───────────────────
-let MongoStore;
-try { MongoStore = require('connect-mongo'); } catch(e) { MongoStore = null; }
-
-function buildSession() {
-  const sessionOpts = {
-    secret: process.env.SESSION_SECRET || 'nexchat-secret-2024',
-    resave: false,
-    saveUninitialized: false,
-    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' }
-  };
-  if (MongoStore && MONGO_URI) {
-    sessionOpts.store = MongoStore.create({ mongoUrl: MONGO_URI, collectionName: 'sessions', ttl: 30 * 24 * 60 * 60 });
-  }
-  return session(sessionOpts);
-}
-app.use(buildSession());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'nexchat-secret-2024',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' }
+}));
 
 // ─── UTILS ─────────────────────────────────────────────────
 function generateFriendCode() {
