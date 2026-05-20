@@ -783,36 +783,57 @@ function setupEmojiPicker() {
 function setupContextMenu() {
   const menu = document.getElementById('context-menu');
   const reactPicker = document.getElementById('reaction-picker');
+
+  // Close menu on outside click (with delay to allow button clicks)
   document.addEventListener('click', function(e) {
-    if (!menu.contains(e.target)) menu.classList.add('hidden');
-    if (!reactPicker.contains(e.target)) reactPicker.classList.add('hidden');
+    if (!menu.contains(e.target) && !menu.classList.contains('hidden')) {
+      setTimeout(() => menu.classList.add('hidden'), 50);
+    }
+    if (!reactPicker.contains(e.target) && !reactPicker.classList.contains('hidden')) {
+      setTimeout(() => reactPicker.classList.add('hidden'), 50);
+    }
   });
+
+  async function deleteMsg(scope) {
+    if (!contextMenuMsg) return;
+    menu.classList.add('hidden');
+    try {
+      const res = await fetch('/api/messages/' + activeChatId() + '/' + contextMenuMsg.id + '?scope=' + scope, { method: 'DELETE' });
+      if (res.ok && scope === 'me') {
+        const el = document.querySelector('[data-msg-id="' + contextMenuMsg.id + '"]');
+        if (el) { const grp = el.closest('.message-group'); if (grp) { grp.style.opacity='0'; grp.style.transition='opacity .2s'; setTimeout(()=>grp.remove(),200); } }
+      }
+    } catch(e) { showToast('Erro ao apagar mensagem'); }
+  }
+
   document.getElementById('ctx-react').addEventListener('click', function(e) {
-    e.stopPropagation(); menu.classList.add('hidden');
+    e.stopPropagation();
+    menu.classList.add('hidden');
     const rect = menu._triggerRect;
     reactPicker.style.left = Math.min(rect.x, window.innerWidth - 280) + 'px';
-    reactPicker.style.top = (rect.y - 70) + 'px';
+    reactPicker.style.top = Math.max(rect.y - 70, 10) + 'px';
     reactPicker.classList.remove('hidden');
   });
-  document.getElementById('ctx-reply').addEventListener('click', function() {
-    if (contextMenuMsg) setReply(contextMenuMsg); menu.classList.add('hidden');
-  });
-  document.getElementById('ctx-copy').addEventListener('click', function() {
-    if (contextMenuMsg) navigator.clipboard.writeText(contextMenuMsg.text).then(() => showToast('📋 Copiado!'));
+
+  document.getElementById('ctx-reply').addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (contextMenuMsg) setReply(contextMenuMsg);
     menu.classList.add('hidden');
   });
-  async function deleteMsg(scope) {
-    if (!contextMenuMsg) return; menu.classList.add('hidden');
-    const res = await fetch('/api/messages/' + activeChatId() + '/' + contextMenuMsg.id + '?scope=' + scope, { method: 'DELETE' });
-    if (res.ok && scope === 'me') {
-      const el = document.querySelector('[data-msg-id="' + contextMenuMsg.id + '"]');
-      if (el) { const grp = el.closest('.message-group'); if (grp) { grp.style.opacity='0'; grp.style.transition='opacity .2s'; setTimeout(()=>grp.remove(),200); } }
+
+  document.getElementById('ctx-copy').addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (contextMenuMsg && contextMenuMsg.text) {
+      navigator.clipboard.writeText(contextMenuMsg.text).then(() => showToast('📋 Copiado!'));
     }
-  }
+    menu.classList.add('hidden');
+  });
+
   const deleteMe = document.getElementById('ctx-delete-me');
   const deleteAll = document.getElementById('ctx-delete-all');
-  if (deleteMe) deleteMe.addEventListener('click', () => deleteMsg('me'));
-  if (deleteAll) deleteAll.addEventListener('click', () => deleteMsg('all'));
+  if (deleteMe) deleteMe.addEventListener('click', function(e) { e.stopPropagation(); deleteMsg('me'); });
+  if (deleteAll) deleteAll.addEventListener('click', function(e) { e.stopPropagation(); deleteMsg('all'); });
+
   document.querySelectorAll('.react-opt').forEach(function(opt) {
     opt.addEventListener('click', function(e) {
       e.stopPropagation();
