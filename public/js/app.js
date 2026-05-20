@@ -2368,4 +2368,252 @@ function setupAudioRecorder() {
 
 // ─── MEDIA UPLOAD (FOTO/VÍDEO) ────────────────────────────
 function setupMediaUpload() {
-  const bt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+  const btn = document.getElementById('media-btn');
+  const input = document.getElementById('media-file-input');
+  if (!btn || !input) return;
+
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { showToast('❌ Arquivo muito grande (máx 50MB)'); return; }
+    const fd = new FormData();
+    fd.append('media', file);
+    showToast('📤 Enviando...');
+    try {
+      const res = await fetch('/api/upload-media', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.url && activeChat && socket) {
+        const chatId = activeChatId();
+        const to = activeChat.data.id;
+        const type = data.type || (file.type.startsWith('video') ? 'video' : 'image');
+        socket.emit('send_message', { to, text: type === 'video' ? '🎥 Vídeo' : '📷 Foto', url: data.url, chatId, type });
+      }
+    } catch(e) { showToast('❌ Erro ao enviar mídia'); }
+    input.value = '';
+  });
+}
+
+// ─── STICKERS ─────────────────────────────────────────────
+let stickerList = [];
+let stickerTab = 'all';
+
+async function setupStickers() {
+  const toggleBtn = document.getElementById('sticker-toggle-btn');
+  const panel = document.getElementById('sticker-panel');
+  const uploadBtn = document.getElementById('sticker-upload-btn');
+  const fileInput = document.getElementById('sticker-file-input');
+  if (!toggleBtn) return;
+
+  toggleBtn.addEventListener('click', () => {
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) loadStickers();
+  });
+
+  document.querySelectorAll('.sticker-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.sticker-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      stickerTab = tab.dataset.tab;
+      renderStickerGrid();
+    });
+  });
+
+  uploadBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append('sticker', file);
+    try {
+      const res = await fetch('/api/stickers', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.sticker) { stickerList.push(data.sticker); renderStickerGrid(); showToast('🎭 Figurinha adicionada!'); }
+    } catch(e) { showToast('❌ Erro ao adicionar figurinha'); }
+    fileInput.value = '';
+  });
+}
+
+async function loadStickers() {
+  try {
+    const res = await fetch('/api/stickers');
+    const data = await res.json();
+    stickerList = data.stickers || [];
+    renderStickerGrid();
+  } catch(e) {}
+}
+
+function renderStickerGrid() {
+  const grid = document.getElementById('sticker-grid'); if (!grid) return;
+  const list = stickerTab === 'fav' ? stickerList.filter(s => s.favorited) : stickerList;
+  if (list.length === 0) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:20px;font-size:13px">' + (stickerTab === 'fav' ? 'Nenhuma favorita ainda' : 'Nenhuma figurinha. Adicione uma!') + '</div>';
+    return;
+  }
+  grid.innerHTML = '';
+  list.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sticker-item' + (s.favorited ? ' favorited' : '');
+    const img = document.createElement('img');
+    img.src = s.url;
+    img.alt = 'Figurinha';
+    const favBtn = document.createElement('button');
+    favBtn.className = 'sticker-fav-btn';
+    favBtn.textContent = s.favorited ? '⭐' : '☆';
+    favBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch('/api/stickers/' + s.id + '/favorite', { method: 'PUT' });
+      const data = await res.json();
+      const idx = stickerList.findIndex(x => x.id === s.id);
+      if (idx !== -1) stickerList[idx] = data.sticker;
+      renderStickerGrid();
+    });
+    item.appendChild(img);
+    item.appendChild(favBtn);
+    item.addEventListener('click', () => sendSticker(s));
+    grid.appendChild(item);
+  });
+}
+
+function sendSticker(sticker) {
+  if (!activeChat || !socket) return;
+  const chatId = activeChatId();
+  const to = activeChat.data.id;
+  socket.emit('send_message', { to, text: '🎭 Figurinha', url: sticker.url, chatId, type: 'sticker' });
+  document.getElementById('sticker-panel').classList.add('hidden');
+}
+
+// ─── INIT MEDIA FEATURES ──────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  setupAudioRecorder();
+  setupMediaUpload();
+  setupStickers();
+});
+
+// ─── SWIPE TO REPLY ───────────────────────────────────────
+function setupSwipeToReply() {
+  const messagesList = document.getElementById('messages-list');
+  if (!messagesList) return;
+
+  let startX = 0, startY = 0, currentEl = null, swipeIndicator = null;
+
+  messagesList.addEventListener('touchstart', function(e) {
+    const bubble = e.target.closest('.message-bubble');
+    if (!bubble) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    currentEl = bubble;
+  }, { passive: true });
+
+  messagesList.addEventListener('touchmove', function(e) {
+    if (!currentEl) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = Math.abs(e.touches[0].clientY - startY);
+    if (dy > 30) { currentEl = null; return; }
+
+    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
+    // out messages swipe left (negative dx), in messages swipe right (positive dx)
+    const validSwipe = isOut ? dx < -20 : dx > 20;
+    if (!validSwipe) return;
+
+    const travel = Math.min(Math.abs(dx), 70);
+    currentEl.style.transform = isOut ? `translateX(-${travel}px)` : `translateX(${travel}px)`;
+    currentEl.style.transition = 'none';
+
+    // Show reply indicator
+    if (!swipeIndicator) {
+      swipeIndicator = document.createElement('div');
+      swipeIndicator.style.cssText = 'position:absolute;background:var(--accent);color:white;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;pointer-events:none;z-index:10;opacity:0;transition:opacity .1s';
+      swipeIndicator.textContent = '↩';
+      currentEl.style.position = 'relative';
+      currentEl.appendChild(swipeIndicator);
+    }
+    swipeIndicator.style.opacity = Math.min(travel / 60, 1).toString();
+    if (isOut) { swipeIndicator.style.left = '4px'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
+    else { swipeIndicator.style.right = '4px'; swipeIndicator.style.left = 'auto'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
+  }, { passive: true });
+
+  messagesList.addEventListener('touchend', function(e) {
+    if (!currentEl) return;
+    const dx = e.changedTouches[0].clientX - startX;
+    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
+    const travel = Math.abs(dx);
+
+    currentEl.style.transition = 'transform .2s ease';
+    currentEl.style.transform = '';
+
+    if (swipeIndicator) { swipeIndicator.remove(); swipeIndicator = null; }
+
+    if (travel > 60) {
+      const msg = currentEl._msgData;
+      if (msg) setReply(msg);
+    }
+    currentEl = null;
+  }, { passive: true });
+}
+
+// Store messages globally for swipe reply lookup
+const _origRenderMessages = typeof renderMessages === 'function' ? renderMessages : null;
+
+// ─── STICKER CONTEXT MENU ─────────────────────────────────
+function showStickerContextMenu(e, stickerUrl) {
+  // Remove existing
+  const existing = document.getElementById('sticker-ctx-menu');
+  if (existing) existing.remove();
+
+  const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 100);
+  const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 100);
+
+  const menu = document.createElement('div');
+  menu.id = 'sticker-ctx-menu';
+  menu.className = 'sticker-ctx-menu';
+  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 120) + 'px';
+
+  // Check if already saved
+  const alreadySaved = stickerList.some(s => s.url === stickerUrl);
+  const alreadyFav = stickerList.find(s => s.url === stickerUrl)?.favorited;
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'sticker-ctx-item';
+  saveBtn.innerHTML = (alreadySaved ? '✅' : '💾') + ' ' + (alreadySaved ? 'Já salva' : 'Salvar figurinha');
+  saveBtn.addEventListener('click', async () => {
+    menu.remove();
+    if (alreadySaved) { showToast('Figurinha já está salva!'); return; }
+    // Download and re-upload as sticker
+    try {
+      const res = await fetch(stickerUrl);
+      const blob = await res.blob();
+      const fd = new FormData();
+      fd.append('sticker', blob, 'sticker.png');
+      const r = await fetch('/api/stickers', { method: 'POST', body: fd });
+      const data = await r.json();
+      if (data.sticker) { stickerList.push(data.sticker); showToast('🎭 Figurinha salva!'); }
+    } catch(e) { showToast('❌ Erro ao salvar figurinha'); }
+  });
+
+  const favBtn = document.createElement('button');
+  favBtn.className = 'sticker-ctx-item';
+  const existingSticker = stickerList.find(s => s.url === stickerUrl);
+  favBtn.innerHTML = (alreadyFav ? '⭐' : '☆') + ' ' + (alreadyFav ? 'Desfavoritar' : 'Favoritar');
+  favBtn.addEventListener('click', async () => {
+    menu.remove();
+    if (!existingSticker) { showToast('Salve a figurinha primeiro!'); return; }
+    const r = await fetch('/api/stickers/' + existingSticker.id + '/favorite', { method: 'PUT' });
+    const data = await r.json();
+    const idx = stickerList.findIndex(s => s.id === existingSticker.id);
+    if (idx !== -1) stickerList[idx] = data.sticker;
+    showToast(data.sticker.favorited ? '⭐ Favoritada!' : 'Desfavoritada');
+  });
+
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'sticker-ctx-item';
+  viewBtn.innerHTML = '🔍 Ver figurinha';
+  viewBtn.addEventListener('click', () => { menu.remove(); openMediaPreview('image', stickerUrl); });
+
+  menu.appendChild(saveBtn);
+  menu.appendChild(favBtn);
+  menu.appendChild(viewBtn);
+  document.body.appendChild(menu);
+
+  setTimeout(() => {
+    document.addEventListener('click', () => menu.remove(), { once: true });
+  }, 100);
+}
