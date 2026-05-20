@@ -333,13 +333,30 @@ function initSocket() {
     }
   });
 
-  socket.on('message_deleted', ({ chatId, msgId }) => {
+  socket.on('message_deleted', ({ chatId, msgId, scope }) => {
     if (activeChat && chatId === activeChatId()) {
       const el = document.querySelector('[data-msg-id="' + msgId + '"]');
       if (el) {
-        const group = el.closest('.message-group');
-        el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
-        setTimeout(() => { if (group) group.remove(); }, 200);
+        if (scope === 'all') {
+          // Show "Mensagem apagada" placeholder
+          const textEl = el.querySelector('.msg-text');
+          if (textEl) {
+            textEl.textContent = 'Mensagem apagada';
+            textEl.style.cssText = 'font-style:italic;color:var(--text-muted);';
+          } else {
+            el.querySelectorAll('img,video,audio,.audio-player').forEach(n => n.remove());
+            const placeholder = document.createElement('div');
+            placeholder.className = 'msg-text';
+            placeholder.textContent = 'Mensagem apagada';
+            placeholder.style.cssText = 'font-style:italic;color:var(--text-muted);';
+            el.insertBefore(placeholder, el.querySelector('.msg-footer'));
+          }
+        } else {
+          // 'me' scope — remove from UI
+          const group = el.closest('.message-group');
+          el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
+          setTimeout(() => { if (group) group.remove(); else el.remove(); }, 200);
+        }
       }
     }
   });
@@ -902,100 +919,128 @@ function setupEmojiPicker() {
   document.addEventListener('click', function(e) { if (!picker.contains(e.target) && e.target.id !== 'emoji-toggle-btn') picker.classList.add('hidden'); });
 }
 
-// ─── CONTEXT MENU ─────────────────────────────────────────
+// ─── CONTEXT MENU (bottom sheet) ──────────────────────────
 function setupContextMenu() {
-  const menu = document.getElementById('context-menu');
-  const reactPicker = document.getElementById('reaction-picker');
-
-  // Overlay invisível para fechar o menu ao tocar fora
-  const overlay = document.createElement('div');
-  overlay.id = 'ctx-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:998;display:none;';
-  document.body.appendChild(overlay);
-
-  function openMenu() {
-    overlay.style.display = 'block';
-  }
-  function closeMenu() {
-    menu.classList.add('hidden');
-    reactPicker.classList.add('hidden');
-    overlay.style.display = 'none';
-  }
-
-  overlay.addEventListener('touchend', closeMenu, { passive: true });
-  overlay.addEventListener('click', closeMenu);
-
-  window._openCtxMenu = openMenu;
-  window._closeCtxMenu = closeMenu;
-
-  async function deleteMsg(scope) {
-    if (!contextMenuMsg) return;
-    const msgId = contextMenuMsg.id;
-    closeMenu();
-    try {
-      const res = await fetch('/api/messages/' + activeChatId() + '/' + msgId + '?scope=' + scope, { method: 'DELETE' });
-      if (res.ok) {
-        // Remove from UI for both 'me' and 'all'
-        const el = document.querySelector('[data-msg-id="' + msgId + '"]');
-        if (el) {
-          const grp = el.closest('.message-group');
-          el.style.opacity='0'; el.style.transform='scale(0.9)'; el.style.transition='all .2s';
-          setTimeout(() => { if (grp) grp.remove(); else el.remove(); }, 200);
-        }
-        if (scope === 'all') showToast('🗑️ Mensagem apagada para todos');
-      }
-    } catch(err) { showToast('Erro ao apagar mensagem'); }
-  }
-
-  function tap(id, fn) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('touchend', function(e) { e.stopPropagation(); e.preventDefault(); closeMenu(); fn(); }, { passive: false });
-    el.addEventListener('click', function(e) { e.stopPropagation(); closeMenu(); fn(); });
-  }
-
-  tap('ctx-react', function() {
-    const rect = menu._triggerRect || { x: 100, y: 200 };
-    reactPicker.style.left = Math.min(rect.x, window.innerWidth - 280) + 'px';
-    reactPicker.style.top = Math.max(rect.y - 70, 10) + 'px';
-    reactPicker.classList.remove('hidden');
-    overlay.style.display = 'block';
-  });
-  tap('ctx-reply', function() { if (contextMenuMsg) setReply(contextMenuMsg); });
-  tap('ctx-copy', function() {
-    if (contextMenuMsg && contextMenuMsg.text) {
-      navigator.clipboard.writeText(contextMenuMsg.text).then(() => showToast('📋 Copiado!'));
-    }
-  });
-  tap('ctx-delete-me', () => deleteMsg('me'));
-  tap('ctx-delete-all', () => deleteMsg('all'));
-
-  document.querySelectorAll('.react-opt').forEach(function(opt) {
-    function doReact() {
-      if (contextMenuMsg) sendReaction(activeChatId(), contextMenuMsg.id, opt.dataset.emoji);
-      closeMenu();
-    }
-    opt.addEventListener('touchend', function(e) { e.stopPropagation(); e.preventDefault(); doReact(); }, { passive: false });
-    opt.addEventListener('click', function(e) { e.stopPropagation(); doReact(); });
-  });
+  // legacy HTML menu is kept hidden; we use dynamic bottom sheet instead
+  const legacyMenu = document.getElementById('context-menu');
+  if (legacyMenu) legacyMenu.style.display = 'none';
 }
 
 function showContextMenu(e, msg, isOut) {
+  if (e && e.stopPropagation) e.stopPropagation();
   contextMenuMsg = msg;
-  const menu = document.getElementById('context-menu');
-  const deleteMe = document.getElementById('ctx-delete-me');
-  const deleteAll = document.getElementById('ctx-delete-all');
-  // Everyone can delete for themselves; only sender can delete for all
-  if (deleteMe) deleteMe.classList.remove('hidden');
-  if (deleteAll) deleteAll.classList.toggle('hidden', !isOut);
-  const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
-  const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
-  menu._triggerRect = { x, y };
-  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 220) + 'px';
-  menu.classList.remove('hidden');
-  if (window._openCtxMenu) window._openCtxMenu();
-  if (e.stopPropagation) e.stopPropagation();
+
+  // Remove any existing sheet
+  const existing = document.getElementById('msg-ctx-sheet');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'msg-ctx-sheet';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.45);';
+
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'background:var(--bg-secondary);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:8px 0 calc(12px + env(safe-area-inset-bottom));animation:slideUp 0.22s ease;overflow:hidden;';
+
+  function closeSheet() { overlay.remove(); contextMenuMsg = null; }
+
+  // ── Emoji reaction bar ──────────────────────────────────
+  const EMOJIS = ['😀','❤️','👍','😂','😮','😢'];
+  const emojiRow = document.createElement('div');
+  emojiRow.style.cssText = 'display:flex;justify-content:space-around;padding:14px 24px 10px;border-bottom:1px solid var(--border);';
+  EMOJIS.forEach(em => {
+    const btn = document.createElement('button');
+    btn.textContent = em;
+    btn.style.cssText = 'font-size:28px;background:none;border:none;cursor:pointer;padding:4px;border-radius:50%;transition:transform 0.1s;';
+    btn.addEventListener('mouseenter', () => btn.style.transform = 'scale(1.3)');
+    btn.addEventListener('mouseleave', () => btn.style.transform = 'scale(1)');
+    btn.addEventListener('click', () => {
+      closeSheet();
+      if (msg) sendReaction(activeChatId(), msg.id, em);
+    });
+    emojiRow.appendChild(btn);
+  });
+  sheet.appendChild(emojiRow);
+
+  // ── Action buttons ──────────────────────────────────────
+  function makeBtn(icon, label, color, onClick, hide) {
+    if (hide) return;
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:flex;align-items:center;gap:14px;width:100%;padding:15px 24px;background:none;border:none;cursor:pointer;font-size:15px;color:' + (color || 'var(--text-primary)') + ';text-align:left;';
+    btn.innerHTML = '<span style="font-size:19px;width:24px;text-align:center">' + icon + '</span><span>' + label + '</span>';
+    btn.addEventListener('mouseenter', () => btn.style.background = 'var(--bg-tertiary)');
+    btn.addEventListener('mouseleave', () => btn.style.background = 'none');
+    btn.addEventListener('click', () => { closeSheet(); onClick(); });
+    // touch support
+    btn.addEventListener('touchend', (ev) => { ev.preventDefault(); closeSheet(); onClick(); }, { passive: false });
+    sheet.appendChild(btn);
+  }
+
+  makeBtn('↩️', 'Responder', '', () => { if (msg) setReply(msg); });
+
+  makeBtn('📋', 'Copiar', '', () => {
+    const text = msg && msg.text ? msg.text : '';
+    if (!text) { showToast('Nada para copiar'); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => showToast('📋 Copiado!')).catch(() => {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+        showToast('📋 Copiado!');
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      showToast('📋 Copiado!');
+    }
+  });
+
+  makeBtn('🗑️', 'Apagar para mim', '#ef4444', async () => {
+    if (!msg) return;
+    try {
+      const res = await fetch('/api/messages/' + activeChatId() + '/' + msg.id + '?scope=me', { method: 'DELETE' });
+      if (res.ok) {
+        const el = document.querySelector('[data-msg-id="' + msg.id + '"]');
+        if (el) {
+          const grp = el.closest('.message-group');
+          el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
+          setTimeout(() => { if (grp) grp.remove(); else el.remove(); }, 200);
+        }
+        showToast('🗑️ Mensagem apagada');
+      } else { showToast('Erro ao apagar mensagem'); }
+    } catch { showToast('Erro ao apagar mensagem'); }
+  });
+
+  makeBtn('🗑️', 'Apagar para todos', '#ef4444', async () => {
+    if (!msg) return;
+    try {
+      const res = await fetch('/api/messages/' + activeChatId() + '/' + msg.id + '?scope=all', { method: 'DELETE' });
+      if (res.ok) {
+        // Mark as deleted in UI immediately
+        const el = document.querySelector('[data-msg-id="' + msg.id + '"]');
+        if (el) {
+          const textEl = el.querySelector('.msg-text');
+          if (textEl) {
+            textEl.textContent = 'Mensagem apagada';
+            textEl.style.cssText = 'font-style:italic;color:var(--text-muted);';
+          } else {
+            // sticker or image — replace content
+            el.innerHTML = '<div class="msg-text" style="font-style:italic;color:var(--text-muted)">Mensagem apagada</div>';
+          }
+        }
+        showToast('🗑️ Mensagem apagada para todos');
+      } else { showToast('Erro ao apagar mensagem'); }
+    } catch { showToast('Erro ao apagar mensagem'); }
+  }, !isOut);
+
+  overlay.appendChild(sheet);
+  // Close on outside tap
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closeSheet(); });
+  overlay.addEventListener('touchend', (ev) => { if (ev.target === overlay) { ev.preventDefault(); closeSheet(); } }, { passive: false });
+  document.body.appendChild(overlay);
 }
 
 function makeLongPress(cb) {
@@ -2751,7 +2796,7 @@ function renderStickerGrid() {
   const grid = document.getElementById('sticker-grid'); if (!grid) return;
   const list = stickerTab === 'fav' ? stickerList.filter(s => s.favorited) : stickerList;
   if (list.length === 0) {
-    grid.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:32px 20px;font-size:13px">' + (stickerTab === 'fav' ? '⭐ Nenhuma favorita ainda' : '🎭 Nenhuma figurinha. Adicione uma!') + '</div>';
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:20px;font-size:13px">' + (stickerTab === 'fav' ? 'Nenhuma favorita ainda' : 'Nenhuma figurinha. Adicione uma!') + '</div>';
     return;
   }
   grid.innerHTML = '';
@@ -2761,98 +2806,22 @@ function renderStickerGrid() {
     const img = document.createElement('img');
     img.src = s.url;
     img.alt = 'Figurinha';
-    img.loading = 'lazy';
-    item.appendChild(img);
-    // Tap to send; long-press or right-click for menu
-    let pressTimer = null;
-    item.addEventListener('mousedown', () => {
-      pressTimer = setTimeout(() => { pressTimer = null; showStickerListMenu(s, item); }, 500);
-    });
-    item.addEventListener('mouseup', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
-    item.addEventListener('mouseleave', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
-    item.addEventListener('touchstart', (e) => {
-      pressTimer = setTimeout(() => { pressTimer = null; showStickerListMenu(s, item); }, 500);
-    }, { passive: true });
-    item.addEventListener('touchend', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
-    item.addEventListener('contextmenu', (e) => { e.preventDefault(); showStickerListMenu(s, item); });
-    item.addEventListener('click', (e) => {
-      if (!pressTimer && pressTimer !== null) return; // came from long-press
-      sendSticker(s);
-    });
-    grid.appendChild(item);
-  });
-}
-
-function showStickerListMenu(sticker, itemEl) {
-  // Remove existing
-  const existing = document.getElementById('sticker-list-menu');
-  if (existing) existing.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'sticker-list-menu';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.45);';
-
-  const sheet = document.createElement('div');
-  sheet.style.cssText = 'background:var(--bg-secondary);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:16px 0 calc(16px + env(safe-area-inset-bottom));animation:slideUp 0.22s ease;';
-
-  // Preview
-  const preview = document.createElement('div');
-  preview.style.cssText = 'display:flex;justify-content:center;padding:12px 0 16px;';
-  const prevImg = document.createElement('img');
-  prevImg.src = sticker.url;
-  prevImg.style.cssText = 'width:100px;height:100px;object-fit:contain;border-radius:12px;';
-  preview.appendChild(prevImg);
-  sheet.appendChild(preview);
-
-  // Divider
-  const div0 = document.createElement('div');
-  div0.style.cssText = 'height:1px;background:var(--border);margin:0 0 4px;';
-  sheet.appendChild(div0);
-
-  function makeOption(icon, label, color, onClick) {
-    const btn = document.createElement('button');
-    btn.style.cssText = 'display:flex;align-items:center;gap:14px;width:100%;padding:16px 24px;background:none;border:none;cursor:pointer;font-size:16px;color:' + (color || 'var(--text-primary)') + ';';
-    btn.innerHTML = '<span style="font-size:20px">' + icon + '</span><span>' + label + '</span>';
-    btn.addEventListener('click', () => { overlay.remove(); onClick(); });
-    // hover
-    btn.addEventListener('mouseenter', () => btn.style.background = 'var(--bg-tertiary)');
-    btn.addEventListener('mouseleave', () => btn.style.background = 'none');
-    sheet.appendChild(btn);
-  }
-
-  const isFav = sticker.favorited;
-  makeOption(isFav ? '💔' : '⭐', isFav ? 'Desfavoritar' : 'Favoritar', '', async () => {
-    try {
-      const r = await fetch('/api/stickers/' + sticker.id + '/favorite', { method: 'PUT' });
-      const data = await r.json();
-      const idx = stickerList.findIndex(s => s.id === sticker.id);
+    const favBtn = document.createElement('button');
+    favBtn.className = 'sticker-fav-btn';
+    favBtn.textContent = s.favorited ? '⭐' : '☆';
+    favBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch('/api/stickers/' + s.id + '/favorite', { method: 'PUT' });
+      const data = await res.json();
+      const idx = stickerList.findIndex(x => x.id === s.id);
       if (idx !== -1) stickerList[idx] = data.sticker;
       renderStickerGrid();
-      showToast(data.sticker.favorited ? '⭐ Favoritada!' : 'Desfavoritada');
-    } catch(e) { showToast('❌ Erro ao favoritar'); }
+    });
+    item.appendChild(img);
+    item.appendChild(favBtn);
+    item.addEventListener('click', () => sendSticker(s));
+    grid.appendChild(item);
   });
-
-  makeOption('🗑️', 'Remover figurinha', '#ef4444', async () => {
-    try {
-      const r = await fetch('/api/stickers/' + sticker.id, { method: 'DELETE' });
-      if (r.ok) {
-        stickerList = stickerList.filter(s => s.id !== sticker.id);
-        renderStickerGrid();
-        showToast('🗑️ Figurinha removida');
-      } else { showToast('❌ Erro ao remover figurinha'); }
-    } catch(e) { showToast('❌ Erro ao remover figurinha'); }
-  });
-
-  // Divider
-  const div1 = document.createElement('div');
-  div1.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
-  sheet.appendChild(div1);
-
-  makeOption('✖️', 'Cancelar', 'var(--text-secondary)', () => {});
-
-  overlay.appendChild(sheet);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
 }
 
 function sendSticker(sticker) {
@@ -2935,46 +2904,32 @@ function setupSwipeToReply() {
 // Store messages globally for swipe reply lookup
 const _origRenderMessages = typeof renderMessages === 'function' ? renderMessages : null;
 
-// ─── STICKER CONTEXT MENU (from chat messages) ───────────
+// ─── STICKER CONTEXT MENU ─────────────────────────────────
 function showStickerContextMenu(e, stickerUrl) {
-  const existing = document.getElementById('sticker-list-menu');
+  // Remove existing
+  const existing = document.getElementById('sticker-ctx-menu');
   if (existing) existing.remove();
 
-  const overlay = document.createElement('div');
-  overlay.id = 'sticker-list-menu';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.45);';
+  const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 100);
+  const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 100);
 
-  const sheet = document.createElement('div');
-  sheet.style.cssText = 'background:var(--bg-secondary);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:16px 0 calc(16px + env(safe-area-inset-bottom));animation:slideUp 0.22s ease;';
+  const menu = document.createElement('div');
+  menu.id = 'sticker-ctx-menu';
+  menu.className = 'sticker-ctx-menu';
+  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 120) + 'px';
 
-  const preview = document.createElement('div');
-  preview.style.cssText = 'display:flex;justify-content:center;padding:12px 0 16px;';
-  const prevImg = document.createElement('img');
-  prevImg.src = stickerUrl;
-  prevImg.style.cssText = 'width:100px;height:100px;object-fit:contain;border-radius:12px;';
-  preview.appendChild(prevImg);
-  sheet.appendChild(preview);
-
-  const div0 = document.createElement('div');
-  div0.style.cssText = 'height:1px;background:var(--border);margin:0 0 4px;';
-  sheet.appendChild(div0);
-
-  function makeOption(icon, label, color, onClick) {
-    const btn = document.createElement('button');
-    btn.style.cssText = 'display:flex;align-items:center;gap:14px;width:100%;padding:16px 24px;background:none;border:none;cursor:pointer;font-size:16px;color:' + (color || 'var(--text-primary)') + ';';
-    btn.innerHTML = '<span style="font-size:20px">' + icon + '</span><span>' + label + '</span>';
-    btn.addEventListener('click', () => { overlay.remove(); onClick(); });
-    btn.addEventListener('mouseenter', () => btn.style.background = 'var(--bg-tertiary)');
-    btn.addEventListener('mouseleave', () => btn.style.background = 'none');
-    sheet.appendChild(btn);
-  }
-
+  // Check if already saved
   const alreadySaved = stickerList.some(s => s.url === stickerUrl);
-  const existingSticker = stickerList.find(s => s.url === stickerUrl);
-  const alreadyFav = existingSticker?.favorited;
+  const alreadyFav = stickerList.find(s => s.url === stickerUrl)?.favorited;
 
-  makeOption(alreadySaved ? '✅' : '💾', alreadySaved ? 'Já salva' : 'Salvar figurinha', '', async () => {
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'sticker-ctx-item';
+  saveBtn.innerHTML = (alreadySaved ? '✅' : '💾') + ' ' + (alreadySaved ? 'Já salva' : 'Salvar figurinha');
+  saveBtn.addEventListener('click', async () => {
+    menu.remove();
     if (alreadySaved) { showToast('Figurinha já está salva!'); return; }
+    // Download and re-upload as sticker
     try {
       const res = await fetch(stickerUrl);
       const blob = await res.blob();
@@ -2986,34 +2941,31 @@ function showStickerContextMenu(e, stickerUrl) {
     } catch(e) { showToast('❌ Erro ao salvar figurinha'); }
   });
 
-  if (existingSticker) {
-    makeOption(alreadyFav ? '💔' : '⭐', alreadyFav ? 'Desfavoritar' : 'Favoritar', '', async () => {
-      try {
-        const r = await fetch('/api/stickers/' + existingSticker.id + '/favorite', { method: 'PUT' });
-        const data = await r.json();
-        const idx = stickerList.findIndex(s => s.id === existingSticker.id);
-        if (idx !== -1) stickerList[idx] = data.sticker;
-        showToast(data.sticker.favorited ? '⭐ Favoritada!' : 'Desfavoritada');
-      } catch(e) { showToast('❌ Erro'); }
-    });
-    makeOption('🗑️', 'Remover dos meus adesivos', '#ef4444', async () => {
-      try {
-        const r = await fetch('/api/stickers/' + existingSticker.id, { method: 'DELETE' });
-        if (r.ok) { stickerList = stickerList.filter(s => s.id !== existingSticker.id); showToast('🗑️ Figurinha removida'); }
-        else showToast('❌ Erro ao remover');
-      } catch(e) { showToast('❌ Erro ao remover'); }
-    });
-  }
+  const favBtn = document.createElement('button');
+  favBtn.className = 'sticker-ctx-item';
+  const existingSticker = stickerList.find(s => s.url === stickerUrl);
+  favBtn.innerHTML = (alreadyFav ? '⭐' : '☆') + ' ' + (alreadyFav ? 'Desfavoritar' : 'Favoritar');
+  favBtn.addEventListener('click', async () => {
+    menu.remove();
+    if (!existingSticker) { showToast('Salve a figurinha primeiro!'); return; }
+    const r = await fetch('/api/stickers/' + existingSticker.id + '/favorite', { method: 'PUT' });
+    const data = await r.json();
+    const idx = stickerList.findIndex(s => s.id === existingSticker.id);
+    if (idx !== -1) stickerList[idx] = data.sticker;
+    showToast(data.sticker.favorited ? '⭐ Favoritada!' : 'Desfavoritada');
+  });
 
-  makeOption('🔍', 'Ver figurinha', '', () => openMediaPreview('image', stickerUrl));
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'sticker-ctx-item';
+  viewBtn.innerHTML = '🔍 Ver figurinha';
+  viewBtn.addEventListener('click', () => { menu.remove(); openMediaPreview('image', stickerUrl); });
 
-  const div1 = document.createElement('div');
-  div1.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
-  sheet.appendChild(div1);
+  menu.appendChild(saveBtn);
+  menu.appendChild(favBtn);
+  menu.appendChild(viewBtn);
+  document.body.appendChild(menu);
 
-  makeOption('✖️', 'Cancelar', 'var(--text-secondary)', () => {});
-
-  overlay.appendChild(sheet);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
+  setTimeout(() => {
+    document.addEventListener('click', () => menu.remove(), { once: true });
+  }, 100);
 }
