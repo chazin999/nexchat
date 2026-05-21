@@ -19,12 +19,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTheme();
   loadWallpaper();
   await checkSession();
-  // Register Service Worker for push notifications
-  if ('serviceWorker' in navigator) {
-    try {
-      await navigator.serviceWorker.register('/sw.js');
-    } catch(e) { console.log('SW registration failed:', e); }
-  }
 });
 
 async function checkSession() {
@@ -235,22 +229,8 @@ function initSocket() {
       scrollToBottom();
       socket.emit('message_read', { chatId: msg.chatId, messageIds: [msg.id] });
     } else {
-      const preview = (msg.text||'').length > 50 ? (msg.text||'').substring(0, 50) + '...' : (msg.text||'Mensagem');
+      const preview = msg.text.length > 50 ? msg.text.substring(0, 50) + '...' : msg.text;
       showToast('💬 ' + msg.fromName + ': ' + preview);
-      // Push notification for background messages
-      if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
-        try {
-          const n = new Notification('NexChat - ' + msg.fromName, {
-            body: preview,
-            icon: '/favicon.ico',
-            tag: 'nexchat-msg-' + msg.chatId,
-            renotify: true
-          });
-          n.onclick = () => { window.focus(); n.close(); };
-        } catch(e){}
-      }
-      // In-app notification banner
-      showInAppNotification(msg);
     }
     updateChatListPreview(msg);
   });
@@ -333,67 +313,16 @@ function initSocket() {
     }
   });
 
-  socket.on('message_deleted', ({ chatId, msgId, scope }) => {
+  socket.on('message_deleted', ({ chatId, msgId }) => {
     if (activeChat && chatId === activeChatId()) {
       const el = document.querySelector('[data-msg-id="' + msgId + '"]');
       if (el) {
-        if (scope === 'all') {
-          // Show "Mensagem apagada" placeholder
-          const textEl = el.querySelector('.msg-text');
-          if (textEl) {
-            textEl.textContent = 'Mensagem apagada';
-            textEl.style.cssText = 'font-style:italic;color:var(--text-muted);';
-          } else {
-            el.querySelectorAll('img,video,audio,.audio-player').forEach(n => n.remove());
-            const placeholder = document.createElement('div');
-            placeholder.className = 'msg-text';
-            placeholder.textContent = 'Mensagem apagada';
-            placeholder.style.cssText = 'font-style:italic;color:var(--text-muted);';
-            el.insertBefore(placeholder, el.querySelector('.msg-footer'));
-          }
-        } else {
-          // 'me' scope — remove from UI
-          const group = el.closest('.message-group');
-          el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
-          setTimeout(() => { if (group) group.remove(); else el.remove(); }, 200);
-        }
+        const group = el.closest('.message-group');
+        el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
+        setTimeout(() => { if (group) group.remove(); }, 200);
       }
     }
   });
-
-  socket.on('group_dissolved', ({ groupId, groupName }) => {
-    groupsList = groupsList.filter(g => g.id !== groupId);
-    if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupId) {
-      activeChat = null;
-      document.getElementById('chat-header').classList.add('hidden');
-      document.getElementById('messages-container').classList.add('hidden');
-      document.getElementById('message-input-area').classList.add('hidden');
-      document.getElementById('no-chat-selected').style.display = '';
-      document.getElementById('app').classList.remove('chat-open');
-    }
-    refreshChatList();
-    showToast('⚠️ O grupo "' + (groupName||'') + '" foi dissolvido pelo dono');
-    try { closeModal('group-modal'); } catch(e){}
-  });
-
-  socket.on('group_dissolved_exit', ({ groupId }) => {
-    groupsList = groupsList.filter(g => g.id !== groupId);
-    if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupId) {
-      activeChat = null;
-      document.getElementById('chat-header').classList.add('hidden');
-      document.getElementById('messages-container').classList.add('hidden');
-      document.getElementById('message-input-area').classList.add('hidden');
-      document.getElementById('no-chat-selected').style.display = '';
-      document.getElementById('app').classList.remove('chat-open');
-    }
-    refreshChatList();
-    try { closeModal('group-modal'); } catch(e){}
-  });
-
-  // Request push notification permission
-  if ('Notification' in window && Notification.permission === 'default') {
-    setTimeout(() => Notification.requestPermission(), 2000);
-  }
 }
 
 function activeChatId() {
@@ -454,50 +383,6 @@ function setupSidebarEvents() {
     });
   });
   document.getElementById('search-input').addEventListener('input', () => refreshChatList());
-
-  // Join group by code button
-  const joinCodeBtn = document.getElementById('join-group-code-btn');
-  if (joinCodeBtn) {
-    joinCodeBtn.addEventListener('click', function() {
-      document.getElementById('join-group-modal').classList.remove('hidden');
-      setTimeout(() => { const inp = document.getElementById('join-group-code-input'); if (inp) inp.focus(); }, 100);
-    });
-  }
-  const joinSubmit = document.getElementById('join-group-submit-btn');
-  if (joinSubmit) {
-    joinSubmit.addEventListener('click', doJoinGroupByCode);
-  }
-  const joinInput = document.getElementById('join-group-code-input');
-  if (joinInput) {
-    joinInput.addEventListener('keydown', e => { if (e.key === 'Enter') doJoinGroupByCode(); });
-  }
-}
-
-async function doJoinGroupByCode() {
-  const input = document.getElementById('join-group-code-input');
-  const msgEl = document.getElementById('join-group-msg');
-  if (!input || !msgEl) return;
-  const code = input.value.trim();
-  if (!code) { msgEl.textContent = 'Digite um código ou link'; msgEl.classList.remove('hidden'); return; }
-  msgEl.classList.add('hidden');
-  const btn = document.getElementById('join-group-submit-btn');
-  btn.textContent = 'Entrando...'; btn.disabled = true;
-  try {
-    const res = await fetch('/api/groups/join-by-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
-    const data = await res.json();
-    if (res.ok && data.group) {
-      closeModal('join-group-modal');
-      input.value = '';
-      showToast('✅ Você entrou no grupo ' + data.group.name + '!');
-      await loadGroups();
-      socket.emit('join_group', { groupId: data.group.id });
-      openChat('group', data.group);
-    } else {
-      msgEl.textContent = data.error || 'Grupo não encontrado';
-      msgEl.classList.remove('hidden');
-    }
-  } catch { msgEl.textContent = 'Erro de conexão'; msgEl.classList.remove('hidden'); }
-  finally { btn.textContent = 'Entrar no Grupo'; btn.disabled = false; }
 }
 
 function refreshChatList() {
@@ -729,31 +614,7 @@ function buildMessageEl(msg, isOut, showAvatar) {
   } else {
     const textEl = document.createElement('div');
     textEl.className = 'msg-text';
-    const raw = msg.text || '';
-    // Linkify URLs
-    const urlRegex = /(https?:\/\/[^\s<>"']+)/gi;
-    if (urlRegex.test(raw)) {
-      urlRegex.lastIndex = 0;
-      const parts = raw.split(urlRegex);
-      parts.forEach((part, i) => {
-        if (urlRegex.test(part)) {
-          urlRegex.lastIndex = 0;
-          const a = document.createElement('a');
-          a.href = part;
-          a.textContent = part;
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-          a.className = 'msg-link';
-          a.addEventListener('click', e => { e.stopPropagation(); });
-          textEl.appendChild(a);
-        } else {
-          if (part) textEl.appendChild(document.createTextNode(part));
-        }
-        urlRegex.lastIndex = 0;
-      });
-    } else {
-      textEl.textContent = raw;
-    }
+    textEl.textContent = msg.text;
     bubble.appendChild(textEl);
   }
 
@@ -919,128 +780,93 @@ function setupEmojiPicker() {
   document.addEventListener('click', function(e) { if (!picker.contains(e.target) && e.target.id !== 'emoji-toggle-btn') picker.classList.add('hidden'); });
 }
 
-// ─── CONTEXT MENU (bottom sheet) ──────────────────────────
+// ─── CONTEXT MENU ─────────────────────────────────────────
 function setupContextMenu() {
-  // legacy HTML menu is kept hidden; we use dynamic bottom sheet instead
-  const legacyMenu = document.getElementById('context-menu');
-  if (legacyMenu) legacyMenu.style.display = 'none';
+  const menu = document.getElementById('context-menu');
+  const reactPicker = document.getElementById('reaction-picker');
+
+  // Overlay invisível para fechar o menu ao tocar fora
+  const overlay = document.createElement('div');
+  overlay.id = 'ctx-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:998;display:none;';
+  document.body.appendChild(overlay);
+
+  function openMenu() {
+    overlay.style.display = 'block';
+  }
+  function closeMenu() {
+    menu.classList.add('hidden');
+    reactPicker.classList.add('hidden');
+    overlay.style.display = 'none';
+  }
+
+  overlay.addEventListener('touchend', closeMenu, { passive: true });
+  overlay.addEventListener('click', closeMenu);
+
+  window._openCtxMenu = openMenu;
+  window._closeCtxMenu = closeMenu;
+
+  async function deleteMsg(scope) {
+    if (!contextMenuMsg) return;
+    closeMenu();
+    try {
+      const res = await fetch('/api/messages/' + activeChatId() + '/' + contextMenuMsg.id + '?scope=' + scope, { method: 'DELETE' });
+      if (res.ok && scope === 'me') {
+        const el = document.querySelector('[data-msg-id="' + contextMenuMsg.id + '"]');
+        if (el) { const grp = el.closest('.message-group'); if (grp) { grp.style.opacity='0'; grp.style.transition='opacity .2s'; setTimeout(()=>grp.remove(),200); } }
+      }
+    } catch(err) { showToast('Erro ao apagar mensagem'); }
+  }
+
+  function tap(id, fn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('touchend', function(e) { e.stopPropagation(); e.preventDefault(); closeMenu(); fn(); }, { passive: false });
+    el.addEventListener('click', function(e) { e.stopPropagation(); closeMenu(); fn(); });
+  }
+
+  tap('ctx-react', function() {
+    const rect = menu._triggerRect || { x: 100, y: 200 };
+    reactPicker.style.left = Math.min(rect.x, window.innerWidth - 280) + 'px';
+    reactPicker.style.top = Math.max(rect.y - 70, 10) + 'px';
+    reactPicker.classList.remove('hidden');
+    overlay.style.display = 'block';
+  });
+  tap('ctx-reply', function() { if (contextMenuMsg) setReply(contextMenuMsg); });
+  tap('ctx-copy', function() {
+    if (contextMenuMsg && contextMenuMsg.text) {
+      navigator.clipboard.writeText(contextMenuMsg.text).then(() => showToast('📋 Copiado!'));
+    }
+  });
+  tap('ctx-delete-me', () => deleteMsg('me'));
+  tap('ctx-delete-all', () => deleteMsg('all'));
+
+  document.querySelectorAll('.react-opt').forEach(function(opt) {
+    function doReact() {
+      if (contextMenuMsg) sendReaction(activeChatId(), contextMenuMsg.id, opt.dataset.emoji);
+      closeMenu();
+    }
+    opt.addEventListener('touchend', function(e) { e.stopPropagation(); e.preventDefault(); doReact(); }, { passive: false });
+    opt.addEventListener('click', function(e) { e.stopPropagation(); doReact(); });
+  });
 }
 
 function showContextMenu(e, msg, isOut) {
-  if (e && e.stopPropagation) e.stopPropagation();
   contextMenuMsg = msg;
-
-  // Remove any existing sheet
-  const existing = document.getElementById('msg-ctx-sheet');
-  if (existing) existing.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'msg-ctx-sheet';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.45);';
-
-  const sheet = document.createElement('div');
-  sheet.style.cssText = 'background:var(--bg-secondary);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:8px 0 calc(12px + env(safe-area-inset-bottom));animation:slideUp 0.22s ease;overflow:hidden;';
-
-  function closeSheet() { overlay.remove(); contextMenuMsg = null; }
-
-  // ── Emoji reaction bar ──────────────────────────────────
-  const EMOJIS = ['😀','❤️','👍','😂','😮','😢'];
-  const emojiRow = document.createElement('div');
-  emojiRow.style.cssText = 'display:flex;justify-content:space-around;padding:14px 24px 10px;border-bottom:1px solid var(--border);';
-  EMOJIS.forEach(em => {
-    const btn = document.createElement('button');
-    btn.textContent = em;
-    btn.style.cssText = 'font-size:28px;background:none;border:none;cursor:pointer;padding:4px;border-radius:50%;transition:transform 0.1s;';
-    btn.addEventListener('mouseenter', () => btn.style.transform = 'scale(1.3)');
-    btn.addEventListener('mouseleave', () => btn.style.transform = 'scale(1)');
-    btn.addEventListener('click', () => {
-      closeSheet();
-      if (msg) sendReaction(activeChatId(), msg.id, em);
-    });
-    emojiRow.appendChild(btn);
-  });
-  sheet.appendChild(emojiRow);
-
-  // ── Action buttons ──────────────────────────────────────
-  function makeBtn(icon, label, color, onClick, hide) {
-    if (hide) return;
-    const btn = document.createElement('button');
-    btn.style.cssText = 'display:flex;align-items:center;gap:14px;width:100%;padding:15px 24px;background:none;border:none;cursor:pointer;font-size:15px;color:' + (color || 'var(--text-primary)') + ';text-align:left;';
-    btn.innerHTML = '<span style="font-size:19px;width:24px;text-align:center">' + icon + '</span><span>' + label + '</span>';
-    btn.addEventListener('mouseenter', () => btn.style.background = 'var(--bg-tertiary)');
-    btn.addEventListener('mouseleave', () => btn.style.background = 'none');
-    btn.addEventListener('click', () => { closeSheet(); onClick(); });
-    // touch support
-    btn.addEventListener('touchend', (ev) => { ev.preventDefault(); closeSheet(); onClick(); }, { passive: false });
-    sheet.appendChild(btn);
-  }
-
-  makeBtn('↩️', 'Responder', '', () => { if (msg) setReply(msg); });
-
-  makeBtn('📋', 'Copiar', '', () => {
-    const text = msg && msg.text ? msg.text : '';
-    if (!text) { showToast('Nada para copiar'); return; }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(() => showToast('📋 Copiado!')).catch(() => {
-        // fallback
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
-        document.body.appendChild(ta); ta.select();
-        document.execCommand('copy'); ta.remove();
-        showToast('📋 Copiado!');
-      });
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy'); ta.remove();
-      showToast('📋 Copiado!');
-    }
-  });
-
-  makeBtn('🗑️', 'Apagar para mim', '#ef4444', async () => {
-    if (!msg) return;
-    try {
-      const res = await fetch('/api/messages/' + activeChatId() + '/' + msg.id + '?scope=me', { method: 'DELETE' });
-      if (res.ok) {
-        const el = document.querySelector('[data-msg-id="' + msg.id + '"]');
-        if (el) {
-          const grp = el.closest('.message-group');
-          el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
-          setTimeout(() => { if (grp) grp.remove(); else el.remove(); }, 200);
-        }
-        showToast('🗑️ Mensagem apagada');
-      } else { showToast('Erro ao apagar mensagem'); }
-    } catch { showToast('Erro ao apagar mensagem'); }
-  });
-
-  makeBtn('🗑️', 'Apagar para todos', '#ef4444', async () => {
-    if (!msg) return;
-    try {
-      const res = await fetch('/api/messages/' + activeChatId() + '/' + msg.id + '?scope=all', { method: 'DELETE' });
-      if (res.ok) {
-        // Mark as deleted in UI immediately
-        const el = document.querySelector('[data-msg-id="' + msg.id + '"]');
-        if (el) {
-          const textEl = el.querySelector('.msg-text');
-          if (textEl) {
-            textEl.textContent = 'Mensagem apagada';
-            textEl.style.cssText = 'font-style:italic;color:var(--text-muted);';
-          } else {
-            // sticker or image — replace content
-            el.innerHTML = '<div class="msg-text" style="font-style:italic;color:var(--text-muted)">Mensagem apagada</div>';
-          }
-        }
-        showToast('🗑️ Mensagem apagada para todos');
-      } else { showToast('Erro ao apagar mensagem'); }
-    } catch { showToast('Erro ao apagar mensagem'); }
-  }, !isOut);
-
-  overlay.appendChild(sheet);
-  // Close on outside tap
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closeSheet(); });
-  overlay.addEventListener('touchend', (ev) => { if (ev.target === overlay) { ev.preventDefault(); closeSheet(); } }, { passive: false });
-  document.body.appendChild(overlay);
+  const menu = document.getElementById('context-menu');
+  const deleteMe = document.getElementById('ctx-delete-me');
+  const deleteAll = document.getElementById('ctx-delete-all');
+  // Everyone can delete for themselves; only sender can delete for all
+  if (deleteMe) deleteMe.classList.remove('hidden');
+  if (deleteAll) deleteAll.classList.toggle('hidden', !isOut);
+  const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+  const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+  menu._triggerRect = { x, y };
+  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 220) + 'px';
+  menu.classList.remove('hidden');
+  if (window._openCtxMenu) window._openCtxMenu();
+  if (e.stopPropagation) e.stopPropagation();
 }
 
 function makeLongPress(cb) {
@@ -1448,7 +1274,7 @@ async function openGroupModal(groupData) {
   membersSection.appendChild(membersList);
   body.appendChild(membersSection);
 
-  // Leave group button (non-owners)
+  // Leave group button
   if (!isOwner) {
     const leaveBtn = document.createElement('button');
     leaveBtn.className = 'btn-danger';
@@ -1472,104 +1298,6 @@ async function openGroupModal(groupData) {
       }
     });
     body.appendChild(leaveBtn);
-  }
-
-  // Dissolve group (owner only)
-  if (isOwner) {
-    const dissolveSection = document.createElement('div');
-    dissolveSection.className = 'dissolve-section';
-    dissolveSection.innerHTML = '<div class="section-title" style="color:var(--danger)">⚠️ Dissolver Grupo</div>';
-
-    const dissolveDesc = document.createElement('p');
-    dissolveDesc.className = 'dissolve-desc';
-    dissolveDesc.textContent = 'Como dono, você pode dissolver o grupo ou transferir a propriedade e sair.';
-    dissolveSection.appendChild(dissolveDesc);
-
-    // Option 1: Dissolve all
-    const dissolveAllBtn = document.createElement('button');
-    dissolveAllBtn.className = 'btn-danger';
-    dissolveAllBtn.textContent = '💥 Dissolver o grupo (remover todos)';
-    dissolveAllBtn.addEventListener('click', async function() {
-      if (!confirm('⚠️ Isso dissolverá o grupo e removerá TODOS os membros. Não pode ser desfeito!\n\nTem certeza?')) return;
-      const res = await fetch('/api/groups/' + groupData.id + '/dissolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'all' })
-      });
-      if (res.ok) {
-        closeModal('group-modal');
-        groupsList = groupsList.filter(g => g.id !== groupData.id);
-        if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupData.id) {
-          activeChat = null;
-          document.getElementById('chat-header').classList.add('hidden');
-          document.getElementById('messages-container').classList.add('hidden');
-          document.getElementById('message-input-area').classList.add('hidden');
-          document.getElementById('no-chat-selected').style.display = '';
-          document.getElementById('app').classList.remove('chat-open');
-        }
-        refreshChatList();
-        showToast('💥 Grupo dissolvido');
-      } else {
-        const d = await res.json();
-        showToast(d.error || 'Erro ao dissolver grupo');
-      }
-    });
-    dissolveSection.appendChild(dissolveAllBtn);
-
-    // Option 2: Transfer + exit
-    const transferSection = document.createElement('div');
-    transferSection.className = 'dissolve-transfer';
-    transferSection.innerHTML = '<div style="font-size:12px;color:var(--text-muted);margin:8px 0 4px">Ou transfira para um membro e saia:</div>';
-
-    const adminSelect = document.createElement('select');
-    adminSelect.className = 'group-edit-input';
-    const defaultOpt = document.createElement('option');
-    defaultOpt.value = '';
-    defaultOpt.textContent = 'Selecione um membro para ser o novo dono...';
-    adminSelect.appendChild(defaultOpt);
-    members.filter(m => m.id !== currentUser.id).forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name;
-      adminSelect.appendChild(opt);
-    });
-    transferSection.appendChild(adminSelect);
-
-    const transferBtn = document.createElement('button');
-    transferBtn.className = 'btn-secondary btn-sm';
-    transferBtn.style.marginTop = '6px';
-    transferBtn.textContent = '🔄 Transferir e sair do grupo';
-    transferBtn.addEventListener('click', async function() {
-      const newAdminId = adminSelect.value;
-      if (!newAdminId) return showToast('Selecione um membro para ser o novo dono');
-      const newAdmin = members.find(m => m.id === newAdminId);
-      if (!confirm('Transferir o grupo para ' + (newAdmin ? newAdmin.name : 'este membro') + ' e sair?\n\nOs outros membros continuarão no grupo.')) return;
-      const res = await fetch('/api/groups/' + groupData.id + '/dissolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'transfer', newAdminId })
-      });
-      if (res.ok) {
-        closeModal('group-modal');
-        groupsList = groupsList.filter(g => g.id !== groupData.id);
-        if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupData.id) {
-          activeChat = null;
-          document.getElementById('chat-header').classList.add('hidden');
-          document.getElementById('messages-container').classList.add('hidden');
-          document.getElementById('message-input-area').classList.add('hidden');
-          document.getElementById('no-chat-selected').style.display = '';
-          document.getElementById('app').classList.remove('chat-open');
-        }
-        refreshChatList();
-        showToast('✅ Grupo transferido. Você saiu.');
-      } else {
-        const d = await res.json();
-        showToast(d.error || 'Erro ao transferir grupo');
-      }
-    });
-    transferSection.appendChild(transferBtn);
-    dissolveSection.appendChild(transferSection);
-    body.appendChild(dissolveSection);
   }
 
   document.getElementById('group-modal').classList.remove('hidden');
@@ -2303,13 +2031,6 @@ function setWallpaperOpacity(value, save) {
   const label = document.getElementById('wallpaper-opacity-value');
   if (input) input.value = Math.round(n * 100);
   if (label) label.textContent = Math.round(n * 100) + '%';
-  // Apply opacity to wallpapered containers via filter: opacity
-  [document.getElementById('messages-container'), document.querySelector('.chat-list')].forEach(el => {
-    if (el && el.classList.contains('wallpaper-applied')) {
-      el.style.backgroundBlendMode = 'normal';
-      // Opacity handled by messages-list background overlay
-    }
-  });
 }
 
 function setupWallpaperModal() {
@@ -2418,31 +2139,11 @@ function applyWallpaperCss(cssBackground, scope) {
   if ((scope === 'messages' || scope === 'both') && msgContainer) {
     msgContainer.classList.add('wallpaper-applied');
     msgContainer.style.setProperty('--nexchat-wallpaper', cssBackground);
-    // Apply opacity via actual CSS filter on messages-list, not background
-    const opacity = getWallpaperOpacity() / 100;
-    msgContainer.style.setProperty('--wp-bg-val', cssBackground);
-    // Use background directly with opacity
-    if (cssBackground.startsWith('url(')) {
-      msgContainer.style.backgroundImage = cssBackground;
-      msgContainer.style.backgroundSize = 'cover';
-      msgContainer.style.backgroundPosition = 'center';
-      msgContainer.style.backgroundRepeat = 'no-repeat';
-    } else {
-      msgContainer.style.backgroundImage = cssBackground;
-    }
     if (chatArea) chatArea.classList.add('has-wallpaper');
   }
   if ((scope === 'contacts' || scope === 'both') && sidebarList) {
     sidebarList.classList.add('wallpaper-applied');
     sidebarList.style.setProperty('--nexchat-wallpaper', cssBackground);
-    if (cssBackground.startsWith('url(')) {
-      sidebarList.style.backgroundImage = cssBackground;
-      sidebarList.style.backgroundSize = 'cover';
-      sidebarList.style.backgroundPosition = 'center';
-      sidebarList.style.backgroundRepeat = 'no-repeat';
-    } else {
-      sidebarList.style.backgroundImage = cssBackground;
-    }
   }
 }
 
@@ -2531,48 +2232,13 @@ function showToast(msg) {
   toast._timer = setTimeout(function() { toast.classList.add('hidden'); }, 3000);
 }
 
-let _notifTimer = null;
-function showInAppNotification(msg) {
-  // Don't show if the chat is currently open
-  if (activeChat && msg.chatId === activeChatId()) return;
-  const existing = document.querySelector('.notif-banner');
-  if (existing) existing.remove();
-  clearTimeout(_notifTimer);
-  const banner = document.createElement('div');
-  banner.className = 'notif-banner';
-  const avatar = msg.fromAvatar || DEFAULT_AVATAR(msg.fromName || 'U');
-  const preview = (msg.text || 'Mensagem').substring(0, 60);
-  banner.innerHTML = '<img src="' + escHtml(avatar) + '" onerror="this.src=\'' + DEFAULT_AVATAR(msg.fromName||'U') + '\'" /><div class="notif-banner-text"><div class="notif-banner-name">' + escHtml(msg.fromName || 'Usuário') + '</div><div class="notif-banner-msg">' + escHtml(preview) + '</div></div>';
-  banner.addEventListener('click', () => {
-    banner.remove();
-    // Open the relevant chat
-    if (msg.chatId && msg.chatId.startsWith('group_')) {
-      const gId = msg.chatId.replace('group_', '');
-      const g = groupsList.find(x => x.id === gId);
-      if (g) openChat('group', g);
-    } else {
-      const f = friendsList.find(x => x.id === msg.from);
-      if (f) openChat('friend', f);
-    }
-  });
-  document.body.appendChild(banner);
-  _notifTimer = setTimeout(() => { if (banner.parentNode) { banner.style.opacity='0'; banner.style.transition='opacity .3s'; setTimeout(()=>banner.remove(),300); } }, 5000);
-}
-
 // ─── AUDIO PLAYER ─────────────────────────────────────────
 function buildAudioPlayer(url) {
-  // Ensure absolute URL
-  const audioUrl = url && !url.startsWith('http') ? (window.location.origin + url) : url;
-  const audio = new Audio();
-  audio.preload = 'metadata';
-  audio.crossOrigin = 'anonymous';
-  // Set src after creation to avoid auto-load issues
-  audio.src = audioUrl;
+  const audio = new Audio(url);
   const wrap = document.createElement('div');
   wrap.className = 'msg-audio-player';
 
   const playBtn = document.createElement('button');
-  playBtn.className = 'audio-play-btn';
   playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
 
   const progress = document.createElement('div');
@@ -2586,24 +2252,9 @@ function buildAudioPlayer(url) {
   timeEl.textContent = '0:00';
 
   let playing = false;
-  playBtn.addEventListener('click', async () => {
-    try {
-      if (playing) {
-        audio.pause();
-        playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
-        playing = false;
-      } else {
-        // Pause all other audio players
-        document.querySelectorAll('.msg-audio-player audio').forEach(a => { if (a !== audio && !a.paused) a.pause(); });
-        document.querySelectorAll('.audio-play-btn').forEach(b => { if (b !== playBtn) b.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'; });
-        await audio.play();
-        playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
-        playing = true;
-      }
-    } catch(e) {
-      console.error('Audio play error:', e);
-      showToast('❌ Erro ao reproduzir áudio');
-    }
+  playBtn.addEventListener('click', () => {
+    if (playing) { audio.pause(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'; playing = false; }
+    else { audio.play(); playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'; playing = true; }
   });
 
   audio.addEventListener('timeupdate', () => {
@@ -2625,9 +2276,6 @@ function buildAudioPlayer(url) {
     audio.currentTime = audio.duration * pct;
   });
 
-  // Append hidden audio to wrap (needed for some browsers)
-  audio.style.display = 'none';
-  wrap.appendChild(audio);
   wrap.appendChild(playBtn);
   wrap.appendChild(progress);
   wrap.appendChild(timeEl);
@@ -2844,132 +2492,61 @@ function setupSwipeToReply() {
   const messagesList = document.getElementById('messages-list');
   if (!messagesList) return;
 
-  const THRESHOLD = 65; // px to trigger reply
-  const MAX_DRAG  = 80; // max px the bubble slides
-
-  let startX = 0, startY = 0, lockAxis = null;
-  let currentBubble = null, indicator = null, triggered = false;
-
-  function resetBubble() {
-    if (!currentBubble) return;
-    currentBubble.style.transition = 'transform 0.25s cubic-bezier(.25,.46,.45,.94)';
-    currentBubble.style.transform  = '';
-    if (indicator) {
-      indicator.style.transform = indicator.style.transform.replace(/scale\([^)]+\)/, '') + ' scale(0)';
-      indicator.style.opacity = '0';
-      const ind = indicator;
-      setTimeout(() => ind.remove(), 250);
-      indicator = null;
-    }
-    currentBubble = null;
-    lockAxis = null;
-    triggered = false;
-  }
+  let startX = 0, startY = 0, currentEl = null, swipeIndicator = null;
 
   messagesList.addEventListener('touchstart', function(e) {
-    if (e.touches.length !== 1) return;
     const bubble = e.target.closest('.message-bubble');
     if (!bubble) return;
-    // don't start if tapping a button/link
-    if (e.target.closest('button,a')) return;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
-    currentBubble = bubble;
-    lockAxis = null;
-    triggered = false;
-    currentBubble.style.transition = 'none';
+    currentEl = bubble;
   }, { passive: true });
 
   messagesList.addEventListener('touchmove', function(e) {
-    if (!currentBubble) return;
+    if (!currentEl) return;
     const dx = e.touches[0].clientX - startX;
-    const dy = e.touches[0].clientY - startY;
+    const dy = Math.abs(e.touches[0].clientY - startY);
+    if (dy > 30) { currentEl = null; return; }
 
-    // Determine axis lock on first meaningful move
-    if (!lockAxis) {
-      if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-      lockAxis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
+    // out messages swipe left (negative dx), in messages swipe right (positive dx)
+    const validSwipe = isOut ? dx < -20 : dx > 20;
+    if (!validSwipe) return;
+
+    const travel = Math.min(Math.abs(dx), 70);
+    currentEl.style.transform = isOut ? `translateX(-${travel}px)` : `translateX(${travel}px)`;
+    currentEl.style.transition = 'none';
+
+    // Show reply indicator
+    if (!swipeIndicator) {
+      swipeIndicator = document.createElement('div');
+      swipeIndicator.style.cssText = 'position:absolute;background:var(--accent);color:white;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;pointer-events:none;z-index:10;opacity:0;transition:opacity .1s';
+      swipeIndicator.textContent = '↩';
+      currentEl.style.position = 'relative';
+      currentEl.appendChild(swipeIndicator);
     }
-    if (lockAxis === 'y') { resetBubble(); return; }
-
-    const isOut = !!currentBubble.closest('.message-group.out');
-    // My messages (out) → drag LEFT (dx < 0) to reply
-    // Other's messages (in) → drag RIGHT (dx > 0) to reply
-    const correctDir = isOut ? dx < 0 : dx > 0;
-    if (!correctDir) return;
-
-    const travel = Math.min(Math.abs(dx), MAX_DRAG);
-    const eased  = travel * (1 - travel / (MAX_DRAG * 2.5)); // rubber-band feel
-    currentBubble.style.transform = isOut
-      ? `translateX(-${eased}px)`
-      : `translateX(${eased}px)`;
-
-    const progress = Math.min(travel / THRESHOLD, 1);
-
-    // Create indicator on first move
-    if (!indicator) {
-      indicator = document.createElement('div');
-      indicator.style.cssText = [
-        'position:absolute',
-        'top:50%',
-        isOut ? 'left:-40px' : 'right:-40px',
-        'transform:translateY(-50%) scale(0)',
-        'background:var(--accent)',
-        'color:white',
-        'border-radius:50%',
-        'width:30px',
-        'height:30px',
-        'display:flex',
-        'align-items:center',
-        'justify-content:center',
-        'font-size:15px',
-        'pointer-events:none',
-        'z-index:20',
-        'opacity:0',
-        'transition:transform 0.15s ease, opacity 0.15s ease',
-        'box-shadow:0 2px 8px rgba(0,0,0,0.25)'
-      ].join(';');
-      indicator.textContent = '↩';
-      currentBubble.style.position = 'relative';
-      currentBubble.style.overflow = 'visible';
-      currentBubble.appendChild(indicator);
-      // trigger reflow so transition fires
-      indicator.getBoundingClientRect();
-    }
-
-    indicator.style.opacity  = progress.toString();
-    const sc = 0.6 + progress * 0.5;
-    const baseTransform = 'translateY(-50%)';
-    indicator.style.transform = `${baseTransform} scale(${sc})`;
-
-    // Haptic + colour shift at threshold
-    if (travel >= THRESHOLD && !triggered) {
-      triggered = true;
-      indicator.style.background = '#22c55e';
-      indicator.style.transform  = `${baseTransform} scale(1.2)`;
-      if (navigator.vibrate) navigator.vibrate(30);
-    } else if (travel < THRESHOLD && triggered) {
-      triggered = false;
-      indicator.style.background = 'var(--accent)';
-    }
+    swipeIndicator.style.opacity = Math.min(travel / 60, 1).toString();
+    if (isOut) { swipeIndicator.style.left = '4px'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
+    else { swipeIndicator.style.right = '4px'; swipeIndicator.style.left = 'auto'; swipeIndicator.style.top = '50%'; swipeIndicator.style.transform = 'translateY(-50%)'; }
   }, { passive: true });
 
   messagesList.addEventListener('touchend', function(e) {
-    if (!currentBubble) return;
+    if (!currentEl) return;
     const dx = e.changedTouches[0].clientX - startX;
-    const isOut = !!currentBubble.closest('.message-group.out');
+    const isOut = currentEl.closest('.message-group')?.classList.contains('out');
     const travel = Math.abs(dx);
-    const bubble = currentBubble;
 
-    resetBubble();
+    currentEl.style.transition = 'transform .2s ease';
+    currentEl.style.transform = '';
 
-    if (travel >= THRESHOLD) {
-      const msg = bubble._msgData;
+    if (swipeIndicator) { swipeIndicator.remove(); swipeIndicator = null; }
+
+    if (travel > 60) {
+      const msg = currentEl._msgData;
       if (msg) setReply(msg);
     }
+    currentEl = null;
   }, { passive: true });
-
-  messagesList.addEventListener('touchcancel', resetBubble, { passive: true });
 }
 
 // Store messages globally for swipe reply lookup
