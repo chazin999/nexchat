@@ -203,9 +203,21 @@ img { display: block; }
 .msg-text { font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
 .msg-footer { display: flex; align-items: center; gap: 5px; margin-top: 5px; justify-content: flex-end; }
 .msg-time { font-size: 10px; opacity: .6; }
-.msg-status { display: flex; align-items: center; }
+.msg-status { display: flex; align-items: center; gap: 1px; }
+.msg-status-icon { flex-shrink: 0; }
+.status-clock { stroke: rgba(255,255,255,0.5); opacity: 0.8; }
+.status-sent { stroke: rgba(255,255,255,0.65); opacity: 0.85; }
+.msg-status-double { display: flex; align-items: center; }
+.status-delivered svg { stroke: rgba(255,255,255,0.65); opacity: 0.85; }
+.status-read svg { stroke: #34D399; opacity: 1; }
+/* Legacy check-icon compat */
 .check-icon { width: 14px; height: 14px; opacity: .7; stroke: rgba(255,255,255,.7); }
 .check-icon.read { stroke: #34D399; opacity: 1; }
+/* Block/Unblock buttons in contact modal */
+.btn-block { display: block; width: 100%; padding: 10px; border: none; border-radius: 12px; background: #ef4444; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity 0.15s; }
+.btn-block:hover { opacity: 0.85; }
+.btn-unblock { display: block; width: 100%; padding: 10px; border: none; border-radius: 12px; background: #22c55e; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity 0.15s; }
+.btn-unblock:hover { opacity: 0.85; }
 .reply-preview { font-size: 11px; background: rgba(0,0,0,.2); border-left: 3px solid var(--accent); border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; opacity: .85; }
 .msg-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .reaction-badge { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 12px; padding: 3px 8px; font-size: 13px; cursor: pointer; transition: var(--transition); display: flex; align-items: center; gap: 3px; }

@@ -233,8 +233,20 @@ function initSocket() {
     if (!window._currentMessages) window._currentMessages = [];
     window._currentMessages.push(msg);
     if (activeChat && msg.chatId === activeChatId()) {
-      appendMessage(msg);
-      scrollToBottom();
+      // Skip if this is an echo of our own optimistic message (already rendered)
+      if (msg.from !== currentUser.id) {
+        appendMessage(msg);
+        scrollToBottom();
+      } else {
+        // Update optimistic message status to 'sent'
+        const tmpEls = document.querySelectorAll('[data-msg-id^="tmp_"]');
+        if (tmpEls.length > 0) {
+          const lastTmp = tmpEls[tmpEls.length - 1];
+          lastTmp.dataset.msgId = msg.id;
+          const statusEl = lastTmp.querySelector('.msg-status');
+          if (statusEl) statusEl.innerHTML = getMsgStatusIcon({ status: 'sent' });
+        }
+      }
       socket.emit('message_read', { chatId: msg.chatId, messageIds: [msg.id] });
     } else {
       const preview = (msg.text||'').length > 50 ? (msg.text||'').substring(0, 50) + '...' : (msg.text||'Mensagem');
@@ -324,7 +336,9 @@ function initSocket() {
 
   socket.on('messages_read', ({ chatId, readBy }) => {
     if (activeChat && chatId === activeChatId() && readBy !== currentUser.id) {
-      document.querySelectorAll('.check-icon').forEach(el => el.classList.add('read'));
+      document.querySelectorAll('.msg-status').forEach(el => {
+        el.innerHTML = getMsgStatusIcon({ status: 'read', read: true });
+      });
     }
   });
 
@@ -660,6 +674,47 @@ function renderMessages(messages) {
   });
 }
 
+// ─── MESSAGE STATUS ICONS ─────────────────────────────────
+// msg.status: 'pending' | 'sent' | 'delivered' | 'read'
+// Legacy: msg.read = true means read
+function getMsgStatusIcon(msg) {
+  const status = msg.status || (msg.read ? 'read' : 'delivered');
+  const SVG_CLOCK = '<svg class="msg-status-icon status-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+  const CHECK_PATH = '<polyline points="20 6 9 17 4 12"/>';
+  const DOUBLE_CHECK_PATH = '<polyline points="4 12 9 17 20 6"/><polyline points="9 17 20 6" transform="translate(-5,3)"/>';
+  if (status === 'pending') {
+    return SVG_CLOCK;
+  } else if (status === 'sent') {
+    // Single grey check
+    return '<svg class="msg-status-icon status-sent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">' + CHECK_PATH + '</svg>';
+  } else if (status === 'read') {
+    // Double blue checks
+    return '<span class="msg-status-double status-read"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">' + CHECK_PATH + '</svg><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14" style="margin-left:-6px">' + CHECK_PATH + '</svg></span>';
+  } else {
+    // delivered = double grey checks
+    return '<span class="msg-status-double status-delivered"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">' + CHECK_PATH + '</svg><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14" style="margin-left:-6px">' + CHECK_PATH + '</svg></span>';
+  }
+}
+
+// ─── BLOCKED USERS ────────────────────────────────────────
+let blockedUsers = JSON.parse(localStorage.getItem('nexchat_blocked') || '{}');
+
+function isUserBlocked(userId) {
+  return !!blockedUsers[userId];
+}
+
+function blockUser(userId, userName) {
+  blockedUsers[userId] = true;
+  localStorage.setItem('nexchat_blocked', JSON.stringify(blockedUsers));
+  showToast('🚫 ' + userName + ' foi bloqueado');
+}
+
+function unblockUser(userId, userName) {
+  delete blockedUsers[userId];
+  localStorage.setItem('nexchat_blocked', JSON.stringify(blockedUsers));
+  showToast('✅ ' + userName + ' foi desbloqueado');
+}
+
 function buildMessageEl(msg, isOut, showAvatar) {
   const group = document.createElement('div');
   group.className = 'message-group ' + (isOut ? 'out' : 'in');
@@ -785,7 +840,7 @@ function buildMessageEl(msg, isOut, showAvatar) {
   footer.className = 'msg-footer';
   footer.innerHTML = '<span class="msg-time">' + formatTime(msg.timestamp) + '</span>';
   if (isOut) {
-    footer.innerHTML += '<span class="msg-status"><svg class="check-icon ' + (msg.read ? 'read' : '') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span>';
+    footer.innerHTML += '<span class="msg-status">' + getMsgStatusIcon(msg) + '</span>';
   }
   bubble.appendChild(footer);
 
@@ -876,9 +931,17 @@ function sendMessage() {
   if (!text || !activeChat || !socket) return;
   const chatId = activeChatId();
   const to = activeChat.data.id;
-  const msgData = { to, text, chatId, type: 'text' };
+  const targetId = activeChat.data.id;
+  const blocked = isUserBlocked(targetId);
+  const msgStatus = blocked ? 'pending' : 'sent';
+  const msgData = { to, text, chatId, type: 'text', status: msgStatus };
   if (replyToMsg) { msgData.replyTo = { id: replyToMsg.id, text: replyToMsg.text, fromName: replyToMsg.fromName }; }
-  socket.emit('send_message', msgData);
+  if (!blocked) socket.emit('send_message', msgData);
+  // Optimistically render the message
+  const fakeMsg = { id: 'tmp_' + Date.now(), from: currentUser.id, fromName: currentUser.name, text, chatId, timestamp: new Date().toISOString(), type: 'text', status: msgStatus };
+  if (replyToMsg) fakeMsg.replyTo = msgData.replyTo;
+  appendMessage(fakeMsg);
+  scrollToBottom();
   if (activeChat.type === 'friend') {
     const f = friendsList.find(f => f.id === activeChat.data.id);
     if (f) f.lastMessage = { text: text, timestamp: new Date().toISOString() };
@@ -1313,6 +1376,24 @@ function openContactModal(data) {
     document.getElementById('app').classList.remove('chat-open');
     loadFriends(); showToast('Amigo removido');
   };
+  // Block/Unblock button
+  const blockBtn = document.getElementById('block-contact-btn');
+  blockBtn.classList.remove('hidden');
+  const blocked = isUserBlocked(data.id);
+  blockBtn.textContent = blocked ? '✅ Desbloquear' : '🚫 Bloquear';
+  blockBtn.className = blocked ? 'btn-unblock' : 'btn-block';
+  blockBtn.onclick = function() {
+    if (isUserBlocked(data.id)) {
+      unblockUser(data.id, customName || data.name);
+      blockBtn.textContent = '🚫 Bloquear';
+      blockBtn.className = 'btn-block';
+    } else {
+      blockUser(data.id, customName || data.name);
+      blockBtn.textContent = '✅ Desbloquear';
+      blockBtn.className = 'btn-unblock';
+    }
+  };
+
   document.getElementById('contact-modal').classList.remove('hidden');
 }
 
@@ -2866,8 +2947,98 @@ function renderStickerGrid() {
     item.appendChild(img);
     item.appendChild(favBtn);
     item.addEventListener('click', () => sendSticker(s));
+    // Long press on sticker in list = show delete dialog
+    let stickerLongPressTimer = null;
+    const startLongPress = (e) => {
+      stickerLongPressTimer = setTimeout(() => {
+        e.preventDefault();
+        e.stopPropagation();
+        showStickerDeleteDialog(s);
+      }, 600);
+    };
+    const cancelLongPress = () => { clearTimeout(stickerLongPressTimer); };
+    item.addEventListener('mousedown', startLongPress);
+    item.addEventListener('touchstart', startLongPress, { passive: true });
+    item.addEventListener('mouseup', cancelLongPress);
+    item.addEventListener('mouseleave', cancelLongPress);
+    item.addEventListener('touchend', cancelLongPress);
+    item.addEventListener('touchcancel', cancelLongPress);
     grid.appendChild(item);
   });
+}
+
+function showStickerDeleteDialog(sticker) {
+  // Remove any existing dialog
+  const existing = document.getElementById('sticker-delete-dialog');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'sticker-delete-dialog';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg-secondary);border-radius:18px;padding:24px 20px 16px;width:290px;max-width:92vw;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+
+  const preview = document.createElement('img');
+  preview.src = sticker.url;
+  preview.style.cssText = 'width:72px;height:72px;object-fit:contain;display:block;margin:0 auto 14px;border-radius:10px;';
+
+  const title = document.createElement('div');
+  title.textContent = 'Apagar figurinha de...';
+  title.style.cssText = 'text-align:center;font-weight:700;font-size:15px;color:var(--text-primary);margin-bottom:16px;';
+
+  const makeBtn = (label, color, action) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'width:100%;padding:12px;margin-bottom:8px;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;background:' + color + ';color:#fff;transition:opacity 0.15s;';
+    b.addEventListener('click', async () => { await action(); overlay.remove(); });
+    return b;
+  };
+
+  const removeFav = makeBtn('⭐ Favoritos', '#f59e0b', async () => {
+    if (sticker.favorited) {
+      await fetch('/api/stickers/' + sticker.id + '/favorite', { method: 'PUT' });
+      const idx = stickerList.findIndex(x => x.id === sticker.id);
+      if (idx !== -1) stickerList[idx].favorited = false;
+    }
+    renderStickerGrid();
+    showToast('Removida dos favoritos');
+  });
+
+  const removeRecent = makeBtn('🕒 Recentes', '#6366f1', async () => {
+    if (sticker.recent) {
+      sticker.recent = false;
+      const idx = stickerList.findIndex(x => x.id === sticker.id);
+      if (idx !== -1) stickerList[idx].recent = false;
+    }
+    renderStickerGrid();
+    showToast('Removida dos recentes');
+  });
+
+  const removeBoth = makeBtn('🗑️ Favoritos e Recentes', '#ef4444', async () => {
+    if (sticker.favorited) {
+      await fetch('/api/stickers/' + sticker.id + '/favorite', { method: 'PUT' });
+    }
+    const idx = stickerList.findIndex(x => x.id === sticker.id);
+    if (idx !== -1) { stickerList[idx].favorited = false; stickerList[idx].recent = false; }
+    renderStickerGrid();
+    showToast('Figurinha removida');
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancelar';
+  cancelBtn.style.cssText = 'width:100%;padding:11px;border:none;border-radius:12px;font-size:14px;cursor:pointer;background:var(--bg-tertiary);color:var(--text-secondary);margin-top:2px;';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+
+  box.appendChild(preview);
+  box.appendChild(title);
+  box.appendChild(removeFav);
+  box.appendChild(removeRecent);
+  box.appendChild(removeBoth);
+  box.appendChild(cancelBtn);
+  overlay.appendChild(box);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 function sendSticker(sticker) {
