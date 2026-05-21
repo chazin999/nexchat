@@ -241,22 +241,19 @@ function initSocket() {
     // Update in-memory status so it persists on re-render
     if (window._currentMessages) {
       const m = window._currentMessages.find(x => x.id === msgId);
-      if (m) m.status = 'delivered';
+      if (m && m.status !== 'read') m.status = 'delivered';
     }
     if (activeChat && chatId === activeChatId()) {
-      const msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
+      // Try exact id first
+      let msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
+      if (!msgEl) {
+        // Fall back to last tmp_ element still waiting confirmation
+        const tmpEls = document.querySelectorAll('[data-msg-id^="tmp_"]');
+        if (tmpEls.length > 0) msgEl = tmpEls[tmpEls.length - 1];
+      }
       if (msgEl) {
         const statusEl = msgEl.querySelector('.msg-status');
-        if (statusEl && statusEl.querySelector('.status-sent')) {
-          animateStatusChange(statusEl, 'delivered');
-        }
-      } else {
-        // Might be a tmp_ element (optimistic), upgrade it too
-        const tmpEls = document.querySelectorAll('[data-msg-id^="tmp_"]');
-        if (tmpEls.length > 0) {
-          const statusEl = tmpEls[tmpEls.length - 1].querySelector('.msg-status');
-          if (statusEl) animateStatusChange(statusEl, 'delivered');
-        }
+        if (statusEl) animateStatusChange(statusEl, 'delivered');
       }
     }
   });
@@ -292,31 +289,24 @@ function initSocket() {
 
   // Handle live read receipts — animate ✔✔ grey → ✔✔ blue instantly
   socket.on('messages_read', ({ chatId, messageIds, readBy }) => {
-    // Update in-memory status
-    if (window._currentMessages && readBy !== currentUser.id) {
+    // Only process reads done by the OTHER person (not ourselves)
+    if (readBy === currentUser.id) return;
+    // Update in-memory status for all MY messages in that chat
+    if (window._currentMessages) {
       window._currentMessages.forEach(m => {
-        if (!messageIds || messageIds.length === 0 || messageIds.includes(m.id)) {
-          if (m.status !== 'read') m.status = 'read';
+        if (m.from === currentUser.id && m.status !== 'read') {
+          m.status = 'read';
+          m.read = true;
         }
       });
     }
-    if (activeChat && chatId === activeChatId() && readBy !== currentUser.id) {
-      // Animate all sent/delivered messages as read
+    if (activeChat && chatId === activeChatId()) {
+      // Animate all MY outgoing messages still showing sent/delivered
       document.querySelectorAll('.msg-status').forEach(el => {
         if (el.querySelector('.status-delivered') || el.querySelector('.status-sent')) {
           animateStatusChange(el, 'read');
         }
       });
-      // Also animate specific messageIds
-      if (messageIds && messageIds.length > 0) {
-        messageIds.forEach(msgId => {
-          const msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
-          if (msgEl) {
-            const statusEl = msgEl.querySelector('.msg-status');
-            if (statusEl) animateStatusChange(statusEl, 'read');
-          }
-        });
-      }
     }
   });
 
@@ -329,20 +319,17 @@ function initSocket() {
         appendMessage(msg);
         scrollToBottom();
       } else {
-        // Server confirmed: update tmp message ID and status
-        // Use msg.delivered flag set by server (recipient was online when message arrived)
+        // Server confirmed: update tmp_ element with real message id
         const tmpEls = document.querySelectorAll('[data-msg-id^="tmp_"]');
         if (tmpEls.length > 0) {
           const lastTmp = tmpEls[tmpEls.length - 1];
           lastTmp.dataset.msgId = msg.id;
-          // Update status in _currentMessages
-          const stored = window._currentMessages.find(m => m.id === msg.id);
-          if (stored) stored.status = msg.delivered ? 'delivered' : 'sent';
+          // Use server's delivered flag: if recipient was online, status is already 'delivered'
+          const initStatus = msg.delivered ? 'delivered' : 'sent';
+          const stored = window._currentMessages ? window._currentMessages.find(m => m.id === msg.id) : null;
+          if (stored) stored.status = initStatus;
           const statusEl = lastTmp.querySelector('.msg-status');
-          if (statusEl) {
-            const confirmedStatus = msg.delivered ? 'delivered' : 'sent';
-            animateStatusChange(statusEl, confirmedStatus);
-          }
+          if (statusEl) animateStatusChange(statusEl, initStatus);
         }
       }
       socket.emit('message_read', { chatId: msg.chatId, messageIds: [msg.id] });
@@ -746,8 +733,18 @@ async function loadMessages() {
   try {
     const res = await fetch('/api/messages/' + chatId);
     const data = await res.json();
-    renderMessages(data.messages || []);
+    const messages = data.messages || [];
+    renderMessages(messages);
     scrollToBottom();
+    // Mark all unread incoming messages as read so sender sees ✔✔ blue
+    if (socket && activeChat && activeChat.type === 'friend') {
+      const unreadIds = messages
+        .filter(m => m.from !== currentUser.id && m.status !== 'read' && !m.read)
+        .map(m => m.id);
+      if (unreadIds.length > 0) {
+        socket.emit('message_read', { chatId, messageIds: unreadIds });
+      }
+    }
   } catch {}
 }
 

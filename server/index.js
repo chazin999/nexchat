@@ -1058,14 +1058,17 @@ io.on('connection', (socket) => {
     if (!chatId.startsWith('group_')) {
       // Check if recipient is currently connected (online)
       const recipientOnline = !!(connectedUsers[to] && connectedUsers[to].size > 0);
-      // Add delivery status to the message echo
-      const msgWithStatus = { ...message, delivered: recipientOnline };
-      socket.emit('message', msgWithStatus); // echo to sender
-      io.to(`user_${to}`).emit('message', message); // to recipient
-      // If recipient is online, immediately notify sender of delivery
+      // If recipient is online, mark as delivered immediately before echo
       if (recipientOnline) {
         message.status = 'delivered';
         saveMessage(chatId, message);
+      }
+      // Echo to sender with delivered flag so client knows initial status
+      const msgWithStatus = { ...message, delivered: recipientOnline };
+      socket.emit('message', msgWithStatus); // echo to sender
+      io.to(`user_${to}`).emit('message', message); // to recipient
+      // Also emit dedicated delivery event for real-time status update
+      if (recipientOnline) {
         socket.emit('message_delivered', { chatId, msgId: message.id });
       }
     } else {
