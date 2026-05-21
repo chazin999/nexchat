@@ -193,6 +193,7 @@ function showApp() {
   document.getElementById('app').classList.remove('hidden');
   initSocket();
   renderSidebarHeader();
+  loadUserStatus();
   loadFriends();
   loadGroups().then(handlePendingGroupJoin);
   loadFriendRequests();
@@ -215,6 +216,40 @@ function showApp() {
   setupBackBtn();
   setupMemberPopupClose();
   setupSwipeToReply();
+}
+
+function loadUserStatus() {
+  const savedStatus = localStorage.getItem('nexchat-user-status');
+  if (savedStatus && currentUser) {
+    currentUser.status = savedStatus;
+    document.getElementById('my-status-dot').className = 'status-dot ' + savedStatus;
+  }
+}
+
+function saveUserStatus(status) {
+  if (currentUser) {
+    currentUser.status = status;
+    localStorage.setItem('nexchat-user-status', status);
+    document.getElementById('my-status-dot').className = 'status-dot ' + status;
+    fetch('/api/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    }).catch(e => console.error('Erro ao salvar status:', e));
+  }
+}
+
+function saveGroupAvatar(groupId, avatarUrl) {
+  if (avatarUrl) {
+    const groupAvatars = JSON.parse(localStorage.getItem('nexchat-group-avatars') || '{}');
+    groupAvatars[groupId] = avatarUrl;
+    localStorage.setItem('nexchat-group-avatars', JSON.stringify(groupAvatars));
+  }
+}
+
+function getGroupAvatar(groupId) {
+  const groupAvatars = JSON.parse(localStorage.getItem('nexchat-group-avatars') || '{}');
+  return groupAvatars[groupId] || null;
 }
 
 function renderSidebarHeader() {
@@ -334,12 +369,52 @@ function initSocket() {
     } else { loadGroups(); }
   });
 
-  socket.on('messages_read', ({ chatId, readBy }) => {
+  socket.on('messages_read', ({ chatId, messageIds, readBy }) => {
     if (activeChat && chatId === activeChatId() && readBy !== currentUser.id) {
-      document.querySelectorAll('.msg-status').forEach(el => {
-        el.innerHTML = getMsgStatusIcon({ status: 'read', read: true });
+      messageIds.forEach(msgId => {
+        const msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
+        if (msgEl) {
+          const statusEl = msgEl.querySelector('.msg-status');
+          if (statusEl) {
+            statusEl.style.transition = 'all 0.3s ease';
+            statusEl.innerHTML = getMsgStatusIcon({ status: 'read', read: true });
+            statusEl.style.transform = 'scale(1.2)';
+            setTimeout(() => { statusEl.style.transform = 'scale(1)'; }, 300);
+          }
+        }
       });
     }
+  });
+
+  socket.on('message_edited', ({ chatId, msgId, newText, editedAt }) => {
+    if (activeChat && chatId === activeChatId()) {
+      const msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
+      if (msgEl) {
+        const textEl = msgEl.querySelector('.msg-text');
+        if (textEl) {
+          textEl.textContent = newText;
+          const footer = msgEl.querySelector('.msg-footer');
+          if (footer) {
+            const editedSpan = footer.querySelector('.msg-edited');
+            if (!editedSpan) {
+              const span = document.createElement('span');
+              span.className = 'msg-edited';
+              span.textContent = ' (editado)';
+              span.style.cssText = 'font-size:11px;color:var(--text-muted);margin-left:4px;';
+              footer.appendChild(span);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  socket.on('group_avatar_updated', ({ groupId, avatar }) => {
+    saveGroupAvatar(groupId, avatar);
+    if (activeChat && activeChat.type === 'group' && activeChat.data.id === groupId) {
+      document.getElementById('chat-avatar').src = avatar;
+    }
+    refreshChatList();
   });
 
   socket.on('reaction_updated', ({ chatId, msgId, reactions }) => {
@@ -1112,6 +1187,14 @@ function showContextMenu(e, msg, isOut) {
   }
 
   makeBtn('↩️', 'Responder', '', () => { if (msg) setReply(msg); });
+
+  makeBtn('✏️', 'Editar', '', () => {
+    if (!msg || !msg.text) return;
+    const newText = prompt('Editar mensagem:', msg.text);
+    if (newText && newText.trim() && newText !== msg.text) {
+      editMessage(activeChatId(), msg.id, newText.trim());
+    }
+  }, msg.from !== currentUser.id);
 
   makeBtn('📋', 'Copiar', '', () => {
     const text = msg && msg.text ? msg.text : '';
@@ -3074,10 +3157,39 @@ function showStickerDeleteDialog(sticker) {
   document.body.appendChild(overlay);
 }
 
+async function editMessage(chatId, msgId, newText) {
+  try {
+    const res = await fetch('/api/messages/' + chatId + '/' + msgId + '/edit', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: newText })
+    });
+    if (res.ok) {
+      showToast('✏️ Mensagem editada');
+    } else {
+      showToast('❌ Erro ao editar mensagem');
+    }
+  } catch (e) {
+    showToast('❌ Erro ao editar mensagem');
+  }
+}
+
 function sendSticker(sticker) {
   if (!activeChat || !socket) return;
   const chatId = activeChatId();
   const to = activeChat.data.id;
+  const fakeMsg = {
+    id: 'tmp_' + Date.now(),
+    from: currentUser.id,
+    fromName: currentUser.name,
+    url: sticker.url,
+    chatId,
+    timestamp: new Date().toISOString(),
+    type: 'sticker',
+    status: 'sent'
+  };
+  appendMessage(fakeMsg);
+  scrollToBottom();
   socket.emit('send_message', { to, text: '🎭 Figurinha', url: sticker.url, chatId, type: 'sticker' });
   document.getElementById('sticker-panel').classList.add('hidden');
 }

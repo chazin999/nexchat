@@ -761,6 +761,29 @@ app.delete('/api/messages/:chatId/:msgId', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── EDITAR MENSAGEM ──────────────────────────────────────────
+app.put('/api/messages/:chatId/:msgId/edit', (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const { chatId, msgId } = req.params;
+  const { text } = req.body;
+  if (!text || !text.trim()) return res.status(400).json({ error: 'Texto vazio' });
+  const msgs = cache.messages[chatId] || [];
+  const msg = msgs.find(m => m.id === msgId);
+  if (!msg) return res.status(404).json({ error: 'Mensagem não encontrada' });
+  if (msg.from !== userId) return res.status(403).json({ error: 'Sem permissão para editar' });
+  msg.text = text.trim();
+  msg.editedAt = new Date().toISOString();
+  msg.edited = true;
+  saveMessage(chatId, msg);
+  io.to(chatId).emit('message_edited', { chatId, msgId, newText: text.trim(), editedAt: msg.editedAt });
+  if (!chatId.startsWith('group_')) {
+    const otherId = chatId.split('_').find(id => id !== userId);
+    if (otherId) io.to('user_' + otherId).emit('message_edited', { chatId, msgId, newText: text.trim(), editedAt: msg.editedAt });
+  }
+  res.json({ success: true, message: msg });
+});
+
 // ─── SECURITY & PASSWORD ────────────────────────────────────
 const SECURITY_QUESTIONS = [
   'Qual é o nome do seu primeiro animal de estimação?',
@@ -974,11 +997,13 @@ io.on('connection', (socket) => {
     socket.join(`user_${userId}`);
     if (!connectedUsers[userId]) connectedUsers[userId] = new Set();
     connectedUsers[userId].add(socket.id);
-    cache.users[userId].status = 'online';
-    saveUser(cache.users[userId]);
     const user = cache.users[userId];
+    user.status = 'online';
+    user.lastSeen = new Date().toISOString();
+    saveUser(user);
     (user.groups || []).forEach(gId => socket.join(`group_${gId}`));
     io.emit('user_status', { userId, status: 'online' });
+    io.emit('user_updated', { userId, status: 'online', lastSeen: user.lastSeen });
     const pending = (cache.friendRequests[userId] || []).length;
     if (pending > 0) socket.emit('pending_requests', { count: pending });
   });
@@ -988,12 +1013,13 @@ io.on('connection', (socket) => {
     const userId = socket.userId;
     if (!userId) return;
     if (type === 'text' && !text?.trim()) return;
+    if (type === 'sticker' && !url) return;
     const user = cache.users[userId]; if (!user) return;
     const msgId = uuidv4(); const timestamp = new Date().toISOString();
-    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, chatId, reactions: {}, replyTo: replyTo || null };
+    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, status: 'sent', chatId, reactions: {}, replyTo: replyTo || null, edited: false };
     if (!cache.messages[chatId]) cache.messages[chatId] = [];
     cache.messages[chatId].push(message);
-    saveMessage(chatId, message); // Persistir no MongoDB
+    saveMessage(chatId, message);
     if (!chatId.startsWith('group_')) { socket.emit('message', message); io.to(`user_${to}`).emit('message', message); }
     else { io.to(chatId).emit('message', message); }
   });
@@ -1007,8 +1033,25 @@ io.on('connection', (socket) => {
 
   socket.on('message_read', ({ chatId, messageIds }) => {
     const msgs = cache.messages[chatId] || [];
-    msgs.forEach(m => { if (messageIds.includes(m.id) && !m.read) { m.read = true; saveMessage(chatId, m); } });
-    io.to(chatId).emit('messages_read', { chatId, messageIds, readBy: socket.userId });
+    const readIds = [];
+    msgs.forEach(m => {
+      if (messageIds.includes(m.id)) {
+        if (!m.read) {
+          m.read = true;
+          m.status = 'read';
+          m.readAt = new Date().toISOString();
+          saveMessage(chatId, m);
+          readIds.push(m.id);
+        }
+      }
+    });
+    if (readIds.length > 0) {
+      io.to(chatId).emit('messages_read', { chatId, messageIds: readIds, readBy: socket.userId });
+      if (!chatId.startsWith('group_')) {
+        const otherId = chatId.split('_').find(id => id !== socket.userId);
+        if (otherId) io.to('user_' + otherId).emit('messages_read', { chatId, messageIds: readIds, readBy: socket.userId });
+      }
+    }
   });
 
   socket.on('join_group', ({ groupId }) => socket.join(`group_${groupId}`));
