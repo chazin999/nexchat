@@ -562,13 +562,21 @@ app.put('/api/groups/:groupId', (req, res) => {
   res.json({ group: updated });
 });
 
-app.post('/api/groups/:groupId/avatar', upload.single('avatar'), (req, res) => {
+app.post('/api/groups/:groupId/avatar', upload.single('avatar'), async (req, res) => {
   const userId = req.session.userId; const { groupId } = req.params; const group = cache.groups[groupId];
   if (!group || !group.members.includes(userId)) return res.status(403).json({ error: 'Sem permissão' });
   if (!group.admins.includes(userId) && !group.allowAllEdit) return res.status(403).json({ error: 'Somente admins podem mudar a foto' });
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
-  if (group.avatar) { const old = path.join(uploadsDir, path.basename(group.avatar)); if (fs.existsSync(old)) fs.unlinkSync(old); }
-  group.avatar = `/uploads/${req.file.filename}`;
+  // Remove old local avatar if not a cloud URL
+  if (group.avatar && group.avatar.startsWith('/uploads/')) {
+    const old = path.join(uploadsDir, path.basename(group.avatar));
+    if (fs.existsSync(old)) try { fs.unlinkSync(old); } catch(e) {}
+  }
+  let avatarUrl = `/uploads/${req.file.filename}`;
+  // Upload to Cloudinary for persistence across deploys
+  const cloudUrl = await uploadToCloud(req.file.path, 'nexchat/groups');
+  if (cloudUrl) { avatarUrl = cloudUrl; try { fs.unlinkSync(req.file.path); } catch(e) {} }
+  group.avatar = avatarUrl;
   saveGroup(group);
   const updated = { ...sanitizeGroup(group), memberDetails: group.members.map(mId => sanitizeUser(cache.users[mId])).filter(Boolean) };
   io.to(`group_${groupId}`).emit('group_updated', updated);
@@ -736,6 +744,30 @@ app.post('/api/messages/:chatId/:msgId/react', (req, res) => {
   res.json({ reactions: msg.reactions });
 });
 
+// ─── EDIT MESSAGE ───────────────────────────────────────────
+app.put('/api/messages/:chatId/:msgId', (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
+  const { chatId, msgId } = req.params;
+  const { text } = req.body;
+  if (!text || !text.trim()) return res.status(400).json({ error: 'Texto não pode ser vazio' });
+  const msgs = cache.messages[chatId] || [];
+  const msg = msgs.find(m => m.id === msgId);
+  if (!msg) return res.status(404).json({ error: 'Mensagem não encontrada' });
+  if (msg.from !== userId) return res.status(403).json({ error: 'Sem permissão' });
+  if (msg.type !== 'text') return res.status(400).json({ error: 'Só é possível editar mensagens de texto' });
+  msg.text = text.trim();
+  msg.edited = true;
+  msg.editedAt = new Date().toISOString();
+  saveMessage(chatId, msg);
+  io.to(chatId).emit('message_edited', { chatId, msgId, text: msg.text, editedAt: msg.editedAt });
+  if (!chatId.startsWith('group_')) {
+    const otherId = chatId.split('_').find(id => id !== userId);
+    if (otherId) io.to('user_' + otherId).emit('message_edited', { chatId, msgId, text: msg.text, editedAt: msg.editedAt });
+  }
+  res.json({ success: true, message: msg });
+});
+
 app.delete('/api/messages/:chatId/:msgId', (req, res) => {
   const userId = req.session.userId;
   if (!userId) return res.status(401).json({ error: 'Não autenticado' });
@@ -759,29 +791,6 @@ app.delete('/api/messages/:chatId/:msgId', (req, res) => {
     saveMessage(chatId, msg);
   }
   res.json({ success: true });
-});
-
-// ─── EDITAR MENSAGEM ──────────────────────────────────────────
-app.put('/api/messages/:chatId/:msgId/edit', (req, res) => {
-  const userId = req.session.userId;
-  if (!userId) return res.status(401).json({ error: 'Não autenticado' });
-  const { chatId, msgId } = req.params;
-  const { text } = req.body;
-  if (!text || !text.trim()) return res.status(400).json({ error: 'Texto vazio' });
-  const msgs = cache.messages[chatId] || [];
-  const msg = msgs.find(m => m.id === msgId);
-  if (!msg) return res.status(404).json({ error: 'Mensagem não encontrada' });
-  if (msg.from !== userId) return res.status(403).json({ error: 'Sem permissão para editar' });
-  msg.text = text.trim();
-  msg.editedAt = new Date().toISOString();
-  msg.edited = true;
-  saveMessage(chatId, msg);
-  io.to(chatId).emit('message_edited', { chatId, msgId, newText: text.trim(), editedAt: msg.editedAt });
-  if (!chatId.startsWith('group_')) {
-    const otherId = chatId.split('_').find(id => id !== userId);
-    if (otherId) io.to('user_' + otherId).emit('message_edited', { chatId, msgId, newText: text.trim(), editedAt: msg.editedAt });
-  }
-  res.json({ success: true, message: msg });
 });
 
 // ─── SECURITY & PASSWORD ────────────────────────────────────
@@ -991,21 +1000,48 @@ app.post('/api/forgot-password-to-email', async (req, res) => {
 const connectedUsers = {};
 
 io.on('connection', (socket) => {
-  socket.on('auth', ({ userId }) => {
+  socket.on('auth', ({ userId, preferredStatus }) => {
     if (!cache.users[userId]) return;
     socket.userId = userId;
     socket.join(`user_${userId}`);
     if (!connectedUsers[userId]) connectedUsers[userId] = new Set();
     connectedUsers[userId].add(socket.id);
+    // Use preferred status if set, otherwise default to 'online'
+    const newStatus = preferredStatus || 'online';
+    cache.users[userId].status = newStatus;
+    saveUser(cache.users[userId]);
     const user = cache.users[userId];
-    user.status = 'online';
-    user.lastSeen = new Date().toISOString();
-    saveUser(user);
     (user.groups || []).forEach(gId => socket.join(`group_${gId}`));
-    io.emit('user_status', { userId, status: 'online' });
-    io.emit('user_updated', { userId, status: 'online', lastSeen: user.lastSeen });
+    io.emit('user_status', { userId, status: newStatus });
     const pending = (cache.friendRequests[userId] || []).length;
     if (pending > 0) socket.emit('pending_requests', { count: pending });
+  });
+
+  socket.on('set_status', ({ status }) => {
+    const userId = socket.userId;
+    if (!userId || !cache.users[userId]) return;
+    const allowed = ['online', 'busy', 'away', 'offline'];
+    if (!allowed.includes(status)) return;
+    cache.users[userId].status = status;
+    saveUser(cache.users[userId]);
+    io.emit('user_status', { userId, status });
+  });
+
+  socket.on('edit_message', ({ chatId, msgId, text }) => {
+    const userId = socket.userId;
+    if (!userId) return;
+    const msgs = cache.messages[chatId] || [];
+    const msg = msgs.find(m => m.id === msgId);
+    if (!msg || msg.from !== userId || msg.type !== 'text') return;
+    msg.text = text.trim();
+    msg.edited = true;
+    msg.editedAt = new Date().toISOString();
+    saveMessage(chatId, msg);
+    io.to(chatId).emit('message_edited', { chatId, msgId, text: msg.text, editedAt: msg.editedAt });
+    if (!chatId.startsWith('group_')) {
+      const otherId = chatId.split('_').find(id => id !== userId);
+      if (otherId) io.to('user_' + otherId).emit('message_edited', { chatId, msgId, text: msg.text, editedAt: msg.editedAt });
+    }
   });
 
   socket.on('send_message', (data) => {
@@ -1013,13 +1049,12 @@ io.on('connection', (socket) => {
     const userId = socket.userId;
     if (!userId) return;
     if (type === 'text' && !text?.trim()) return;
-    if (type === 'sticker' && !url) return;
     const user = cache.users[userId]; if (!user) return;
     const msgId = uuidv4(); const timestamp = new Date().toISOString();
-    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, status: 'sent', chatId, reactions: {}, replyTo: replyTo || null, edited: false };
+    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, chatId, reactions: {}, replyTo: replyTo || null };
     if (!cache.messages[chatId]) cache.messages[chatId] = [];
     cache.messages[chatId].push(message);
-    saveMessage(chatId, message);
+    saveMessage(chatId, message); // Persistir no MongoDB
     if (!chatId.startsWith('group_')) { socket.emit('message', message); io.to(`user_${to}`).emit('message', message); }
     else { io.to(chatId).emit('message', message); }
   });
@@ -1033,25 +1068,8 @@ io.on('connection', (socket) => {
 
   socket.on('message_read', ({ chatId, messageIds }) => {
     const msgs = cache.messages[chatId] || [];
-    const readIds = [];
-    msgs.forEach(m => {
-      if (messageIds.includes(m.id)) {
-        if (!m.read) {
-          m.read = true;
-          m.status = 'read';
-          m.readAt = new Date().toISOString();
-          saveMessage(chatId, m);
-          readIds.push(m.id);
-        }
-      }
-    });
-    if (readIds.length > 0) {
-      io.to(chatId).emit('messages_read', { chatId, messageIds: readIds, readBy: socket.userId });
-      if (!chatId.startsWith('group_')) {
-        const otherId = chatId.split('_').find(id => id !== socket.userId);
-        if (otherId) io.to('user_' + otherId).emit('messages_read', { chatId, messageIds: readIds, readBy: socket.userId });
-      }
-    }
+    msgs.forEach(m => { if (messageIds.includes(m.id) && !m.read) { m.read = true; saveMessage(chatId, m); } });
+    io.to(chatId).emit('messages_read', { chatId, messageIds, readBy: socket.userId });
   });
 
   socket.on('join_group', ({ groupId }) => socket.join(`group_${groupId}`));
