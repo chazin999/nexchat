@@ -723,7 +723,7 @@ app.get('/api/messages/:chatId', (req, res) => {
   const userId = req.session.userId;
   if (!userId) return res.status(401).json({ error: 'Não autenticado' });
   const { chatId } = req.params; const msgs = cache.messages[chatId] || [];
-  msgs.forEach(m => { if (m.to === userId && !m.read) { m.read = true; saveMessage(chatId, m); } });
+  msgs.forEach(m => { if (m.to === userId && !m.read) { m.read = true; m.status = 'read'; saveMessage(chatId, m); } });
   const filtered = msgs.filter(m => !m.deletedFor || !m.deletedFor.includes(userId));
   res.json({ messages: filtered });
 });
@@ -1051,7 +1051,7 @@ io.on('connection', (socket) => {
     if (type === 'text' && !text?.trim()) return;
     const user = cache.users[userId]; if (!user) return;
     const msgId = uuidv4(); const timestamp = new Date().toISOString();
-    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, chatId, reactions: {}, replyTo: replyTo || null };
+    const message = { id: msgId, from: userId, to, fromName: user.name, fromAvatar: user.avatar, senderName: user.name, text: (text || '').trim(), url: url || null, type, timestamp, read: false, status: 'sent', chatId, reactions: {}, replyTo: replyTo || null };
     if (!cache.messages[chatId]) cache.messages[chatId] = [];
     cache.messages[chatId].push(message);
     saveMessage(chatId, message); // Persistir no MongoDB
@@ -1064,6 +1064,8 @@ io.on('connection', (socket) => {
       io.to(`user_${to}`).emit('message', message); // to recipient
       // If recipient is online, immediately notify sender of delivery
       if (recipientOnline) {
+        message.status = 'delivered';
+        saveMessage(chatId, message);
         socket.emit('message_delivered', { chatId, msgId: message.id });
       }
     } else {
@@ -1080,7 +1082,7 @@ io.on('connection', (socket) => {
 
   socket.on('message_read', ({ chatId, messageIds }) => {
     const msgs = cache.messages[chatId] || [];
-    msgs.forEach(m => { if (messageIds.includes(m.id) && !m.read) { m.read = true; saveMessage(chatId, m); } });
+    msgs.forEach(m => { if (messageIds.includes(m.id) && !m.read) { m.read = true; m.status = 'read'; saveMessage(chatId, m); } });
     io.to(chatId).emit('messages_read', { chatId, messageIds, readBy: socket.userId });
   });
 

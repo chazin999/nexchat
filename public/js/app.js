@@ -238,6 +238,11 @@ function initSocket() {
 
   // Handle delivery confirmation (recipient is online → ✔✔ cinza)
   socket.on('message_delivered', ({ chatId, msgId }) => {
+    // Update in-memory status so it persists on re-render
+    if (window._currentMessages) {
+      const m = window._currentMessages.find(x => x.id === msgId);
+      if (m) m.status = 'delivered';
+    }
     if (activeChat && chatId === activeChatId()) {
       const msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
       if (msgEl) {
@@ -287,27 +292,28 @@ function initSocket() {
 
   // Handle live read receipts — animate ✔✔ grey → ✔✔ blue instantly
   socket.on('messages_read', ({ chatId, messageIds, readBy }) => {
+    // Update in-memory status
+    if (window._currentMessages && readBy !== currentUser.id) {
+      window._currentMessages.forEach(m => {
+        if (!messageIds || messageIds.length === 0 || messageIds.includes(m.id)) {
+          if (m.status !== 'read') m.status = 'read';
+        }
+      });
+    }
     if (activeChat && chatId === activeChatId() && readBy !== currentUser.id) {
-      // If specific messageIds provided, only animate those; else animate all
+      // Animate all sent/delivered messages as read
+      document.querySelectorAll('.msg-status').forEach(el => {
+        if (el.querySelector('.status-delivered') || el.querySelector('.status-sent')) {
+          animateStatusChange(el, 'read');
+        }
+      });
+      // Also animate specific messageIds
       if (messageIds && messageIds.length > 0) {
         messageIds.forEach(msgId => {
           const msgEl = document.querySelector('[data-msg-id="' + msgId + '"]');
           if (msgEl) {
             const statusEl = msgEl.querySelector('.msg-status');
             if (statusEl) animateStatusChange(statusEl, 'read');
-          }
-        });
-        // Also animate any remaining sent/delivered msgs in the chat (bulk read)
-        document.querySelectorAll('.msg-status').forEach(el => {
-          if (el.querySelector('.status-delivered') || el.querySelector('.status-sent')) {
-            animateStatusChange(el, 'read');
-          }
-        });
-      } else {
-        // Animate all my messages in this chat
-        document.querySelectorAll('.msg-status').forEach(el => {
-          if (el.querySelector('.status-delivered') || el.querySelector('.status-sent')) {
-            animateStatusChange(el, 'read');
           }
         });
       }
@@ -324,18 +330,17 @@ function initSocket() {
         scrollToBottom();
       } else {
         // Server confirmed: update tmp message ID and status
-        // If recipient is online → delivered (✔✔ cinza), else → sent (✔ cinza)
+        // Use msg.delivered flag set by server (recipient was online when message arrived)
         const tmpEls = document.querySelectorAll('[data-msg-id^="tmp_"]');
         if (tmpEls.length > 0) {
           const lastTmp = tmpEls[tmpEls.length - 1];
           lastTmp.dataset.msgId = msg.id;
+          // Update status in _currentMessages
+          const stored = window._currentMessages.find(m => m.id === msg.id);
+          if (stored) stored.status = msg.delivered ? 'delivered' : 'sent';
           const statusEl = lastTmp.querySelector('.msg-status');
           if (statusEl) {
-            // Check if recipient is online by looking at friendsList
-            const recipientId = msg.to || (activeChat && activeChat.data && activeChat.data.id);
-            const recipient = friendsList.find(f => f.id === recipientId);
-            const recipientOnline = recipient && recipient.status === 'online';
-            const confirmedStatus = recipientOnline ? 'delivered' : 'sent';
+            const confirmedStatus = msg.delivered ? 'delivered' : 'sent';
             animateStatusChange(statusEl, confirmedStatus);
           }
         }
@@ -793,6 +798,12 @@ function animateStatusChange(statusEl, newStatus) {
 
 // Called when recipient comes online — upgrade all 'sent' msgs in active chat to 'delivered'
 function upgradeToDelivered(friendId) {
+  // Update in-memory status for persistence
+  if (window._currentMessages) {
+    window._currentMessages.forEach(m => {
+      if (m.status === 'sent') m.status = 'delivered';
+    });
+  }
   if (!activeChat || activeChat.type !== 'friend' || activeChat.data.id !== friendId) return;
   document.querySelectorAll('.msg-status').forEach(el => {
     if (el.querySelector('.status-sent')) {
@@ -809,16 +820,14 @@ function upgradeToDelivered(friendId) {
 //   'read'      → ✔✔ azul     (destinatário abriu e leu)
 // Legacy: msg.read = true → 'read'
 function getMsgStatusIcon(msg) {
-  // Resolve status: explicit > legacy read flag > online-check for delivered vs sent
+  // Resolve status: explicit field (persisted) > legacy read flag > default sent
   let status = msg.status;
   if (!status) {
     if (msg.read) {
       status = 'read';
     } else {
-      // If we know recipient is offline, show single tick (sent); else double grey (delivered)
-      const recipientId = msg.to || (activeChat && activeChat.data && activeChat.data.id);
-      const recipient = recipientId ? friendsList.find(f => f.id === recipientId) : null;
-      status = (recipient && recipient.status === 'online') ? 'delivered' : 'sent';
+      // Default to 'sent' — only upgrade to 'delivered' when server confirms via socket
+      status = 'sent';
     }
   }
 
