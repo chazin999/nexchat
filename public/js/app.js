@@ -627,7 +627,10 @@ async function openChat(type, data) {
   };
 
   applyPendingWallpaper();
-  setTimeout(() => document.getElementById('msg-input').focus(), 150);
+  updateBlockedUI();
+  if (!isUserBlocked(type === 'friend' ? data.id : '')) {
+    setTimeout(() => document.getElementById('msg-input').focus(), 150);
+  }
   await loadMessages();
 }
 
@@ -703,16 +706,46 @@ function isUserBlocked(userId) {
   return !!blockedUsers[userId];
 }
 
+function updateBlockedUI() {
+  if (!activeChat || activeChat.type !== 'friend') return;
+  const blocked = isUserBlocked(activeChat.data.id);
+  const inputRow = document.getElementById('input-row');
+  const blockedBanner = document.getElementById('blocked-banner');
+  const unblockBtn = document.getElementById('unblock-chat-btn');
+  if (!inputRow || !blockedBanner) return;
+  if (blocked) {
+    inputRow.style.display = 'none';
+    blockedBanner.style.display = 'flex';
+    // Close sticker/emoji panels
+    const stickerPanel = document.getElementById('sticker-panel');
+    const emojiPicker = document.getElementById('emoji-picker');
+    if (stickerPanel) stickerPanel.classList.add('hidden');
+    if (emojiPicker) emojiPicker.classList.add('hidden');
+  } else {
+    inputRow.style.display = '';
+    blockedBanner.style.display = 'none';
+  }
+  unblockBtn.onclick = function() {
+    unblockUser(activeChat.data.id, activeChat.data.name);
+    updateBlockedUI();
+    // Also update block btn in contact modal if open
+    const blockBtn = document.getElementById('block-contact-btn');
+    if (blockBtn) { blockBtn.textContent = '🚫 Bloquear'; blockBtn.className = 'btn-block'; }
+  };
+}
+
 function blockUser(userId, userName) {
   blockedUsers[userId] = true;
   localStorage.setItem('nexchat_blocked', JSON.stringify(blockedUsers));
   showToast('🚫 ' + userName + ' foi bloqueado');
+  updateBlockedUI();
 }
 
 function unblockUser(userId, userName) {
   delete blockedUsers[userId];
   localStorage.setItem('nexchat_blocked', JSON.stringify(blockedUsers));
   showToast('✅ ' + userName + ' foi desbloqueado');
+  updateBlockedUI();
 }
 
 function buildMessageEl(msg, isOut, showAvatar) {

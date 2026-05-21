@@ -440,6 +440,11 @@
           </button>
         </div>
       </div>
+      <!-- Blocked user banner (shown instead of input when contact is blocked) -->
+      <div id="blocked-banner" style="display:none;flex-direction:column;align-items:center;gap:10px;padding:14px 16px;">
+        <span id="blocked-label" style="color:#22c55e;font-weight:700;font-size:13px;letter-spacing:0.3px;">🔒 Contato bloqueado</span>
+        <button id="unblock-chat-btn" style="width:100%;padding:13px;border:none;border-radius:14px;background:#ef4444;color:#fff;font-size:15px;font-weight:700;cursor:pointer;letter-spacing:0.2px;">🚫 Desbloquear</button>
+      </div>
       <div class="input-row" id="input-row">
         <div class="input-left-btns">
           <button class="icon-btn emoji-toggle-btn" id="emoji-toggle-btn" title="Emojis">
