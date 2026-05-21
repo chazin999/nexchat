@@ -8,6 +8,8 @@ let typingTimer = null;
 let currentFilter = 'all';
 let contextMenuMsg = null;
 let replyToMsg = null;
+let selectionMode = false;
+let selectedMessages = new Map(); // id -> msg
 
 const DEFAULT_AVATAR = (name) =>
   `https://ui-avatars.com/api/?name=${encodeURIComponent(name||'U')}&background=4F46E5&color=fff&size=128&bold=true`;
@@ -778,8 +780,15 @@ function buildMessageEl(msg, isOut, showAvatar) {
     updateReactionsDisplay(bubble, msg.reactions, msg.id, msg.chatId);
   }
 
-  bubble.addEventListener('contextmenu', function(e) { e.preventDefault(); showContextMenu(e, msg, isOut); });
-  bubble.addEventListener('touchstart', makeLongPress(function(e) { showContextMenu(e, msg, isOut); }), { passive: true });
+  bubble.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    if (selectionMode) { toggleSelectMsg(bubble, msg); return; }
+    showContextMenu(e, msg, isOut);
+  });
+  bubble.addEventListener('touchstart', makeLongPress(function(e) {
+    if (selectionMode) { toggleSelectMsg(bubble, msg); return; }
+    enterSelectionMode(bubble, msg);
+  }), { passive: true });
   bubble._msgData = msg; // store for swipe reply
 
   withAvatar.appendChild(bubble);
@@ -880,7 +889,12 @@ function setReply(msg) {
     banner.style.cssText = 'padding:8px 16px;background:var(--bg-tertiary);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-secondary)';
     document.getElementById('message-input-area').before(banner);
   }
-  banner.innerHTML = '<span>↩ Respondendo a <strong>' + escHtml(msg.fromName) + '</strong>: ' + escHtml(msg.text.substring(0, 60)) + '</span><button onclick="clearReply()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:16px">×</button>';
+  const previewText = msg.type === 'sticker' ? '🎭 Figurinha' :
+                      msg.type === 'image' ? '🖼️ Imagem' :
+                      msg.type === 'video' ? '🎥 Vídeo' :
+                      msg.type === 'audio' ? '🎵 Áudio' :
+                      (msg.text || '').substring(0, 60);
+  banner.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><div style="width:3px;height:32px;background:var(--accent);border-radius:2px;flex-shrink:0"></div><div><div style="font-weight:600;color:var(--accent);font-size:11px">↩ ' + escHtml(msg.fromName || 'Você') + '</div><div style="margin-top:2px;color:var(--text-muted)">' + escHtml(previewText) + '</div></div></div><button onclick="clearReply()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:20px;padding:4px">×</button>';
   document.getElementById('msg-input').focus();
 }
 
@@ -2854,6 +2868,140 @@ document.addEventListener('DOMContentLoaded', () => {
   setupStickers();
 });
 
+// ─── MESSAGE SELECTION MODE ───────────────────────────────
+function enterSelectionMode(bubble, msg) {
+  selectionMode = true;
+  selectedMessages.clear();
+  toggleSelectMsg(bubble, msg);
+  showSelectionBar();
+  if (navigator.vibrate) navigator.vibrate(40);
+}
+
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedMessages.clear();
+  // Remove all visual selections
+  document.querySelectorAll('.message-bubble.selected').forEach(b => {
+    b.classList.remove('selected');
+    const chk = b.querySelector('.msg-select-check');
+    if (chk) chk.remove();
+  });
+  const bar = document.getElementById('selection-bar');
+  if (bar) bar.remove();
+}
+
+function toggleSelectMsg(bubble, msg) {
+  if (selectedMessages.has(msg.id)) {
+    selectedMessages.delete(msg.id);
+    bubble.classList.remove('selected');
+    const chk = bubble.querySelector('.msg-select-check');
+    if (chk) chk.remove();
+  } else {
+    selectedMessages.set(msg.id, msg);
+    bubble.classList.add('selected');
+    // Add checkmark if not there
+    if (!bubble.querySelector('.msg-select-check')) {
+      const chk = document.createElement('div');
+      chk.className = 'msg-select-check';
+      chk.innerHTML = '✓';
+      bubble.appendChild(chk);
+    }
+  }
+  updateSelectionBar();
+  // Exit if nothing selected
+  if (selectedMessages.size === 0) exitSelectionMode();
+}
+
+function showSelectionBar() {
+  const existing = document.getElementById('selection-bar');
+  if (existing) existing.remove();
+
+  const bar = document.createElement('div');
+  bar.id = 'selection-bar';
+  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--bg-secondary);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:12px 16px;animation:slideDown 0.2s ease;box-shadow:0 2px 12px rgba(0,0,0,0.3);';
+
+  const left = document.createElement('div');
+  left.style.cssText = 'display:flex;align-items:center;gap:12px;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary);font-size:22px;cursor:pointer;padding:4px;line-height:1;';
+  cancelBtn.textContent = '✕';
+  cancelBtn.addEventListener('click', exitSelectionMode);
+  cancelBtn.addEventListener('touchend', (ev) => { ev.preventDefault(); exitSelectionMode(); }, { passive: false });
+
+  const countEl = document.createElement('span');
+  countEl.id = 'selection-count';
+  countEl.style.cssText = 'font-size:16px;font-weight:700;color:var(--text-primary);';
+  countEl.textContent = '0 selecionadas';
+
+  left.appendChild(cancelBtn);
+  left.appendChild(countEl);
+
+  const right = document.createElement('div');
+  right.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+  const deleteForMeBtn = document.createElement('button');
+  deleteForMeBtn.id = 'sel-delete-me';
+  deleteForMeBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--danger);padding:7px 14px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;';
+  deleteForMeBtn.textContent = 'Apagar para mim';
+  deleteForMeBtn.addEventListener('click', () => deleteSelectedMessages('me'));
+  deleteForMeBtn.addEventListener('touchend', (ev) => { ev.preventDefault(); deleteSelectedMessages('me'); }, { passive: false });
+
+  const deleteForAllBtn = document.createElement('button');
+  deleteForAllBtn.id = 'sel-delete-all';
+  deleteForAllBtn.style.cssText = 'background:var(--danger);border:none;color:#fff;padding:7px 14px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;';
+  deleteForAllBtn.textContent = 'Apagar para todos';
+  deleteForAllBtn.addEventListener('click', () => deleteSelectedMessages('all'));
+  deleteForAllBtn.addEventListener('touchend', (ev) => { ev.preventDefault(); deleteSelectedMessages('all'); }, { passive: false });
+
+  right.appendChild(deleteForMeBtn);
+  right.appendChild(deleteForAllBtn);
+  bar.appendChild(left);
+  bar.appendChild(right);
+  document.body.appendChild(bar);
+}
+
+function updateSelectionBar() {
+  const countEl = document.getElementById('selection-count');
+  if (countEl) {
+    const n = selectedMessages.size;
+    countEl.textContent = n + (n === 1 ? ' selecionada' : ' selecionadas');
+  }
+  // Show "apagar para todos" only if all selected are mine
+  const allMine = [...selectedMessages.values()].every(m => m.from === currentUser.id);
+  const allBtn = document.getElementById('sel-delete-all');
+  if (allBtn) allBtn.style.display = allMine ? '' : 'none';
+}
+
+async function deleteSelectedMessages(scope) {
+  const msgs = [...selectedMessages.values()];
+  const chatId = activeChatId();
+  let anyError = false;
+  for (const msg of msgs) {
+    try {
+      const canDeleteAll = scope === 'all' && msg.from === currentUser.id;
+      const effectiveScope = canDeleteAll ? 'all' : 'me';
+      const res = await fetch('/api/messages/' + chatId + '/' + msg.id + '?scope=' + effectiveScope, { method: 'DELETE' });
+      if (res.ok) {
+        const el = document.querySelector('[data-msg-id="' + msg.id + '"]');
+        if (el) {
+          if (effectiveScope === 'all') {
+            const textEl = el.querySelector('.msg-text');
+            if (textEl) { textEl.textContent = 'Mensagem apagada'; textEl.style.cssText = 'font-style:italic;color:var(--text-muted);'; }
+            else { el.innerHTML = '<div class="msg-text" style="font-style:italic;color:var(--text-muted)">Mensagem apagada</div>'; }
+          } else {
+            const grp = el.closest('.message-group');
+            el.style.opacity = '0'; el.style.transform = 'scale(0.9)'; el.style.transition = 'all .2s';
+            setTimeout(() => { if (grp) grp.remove(); else el.remove(); }, 200);
+          }
+        }
+      } else { anyError = true; }
+    } catch { anyError = true; }
+  }
+  exitSelectionMode();
+  showToast(anyError ? '⚠️ Algumas mensagens não puderam ser apagadas' : '🗑️ ' + msgs.length + ' mensagem(ns) apagada(s)');
+}
+
 // ─── SWIPE TO REPLY ───────────────────────────────────────
 function setupSwipeToReply() {
   const messagesList = document.getElementById('messages-list');
@@ -2885,8 +3033,13 @@ function setupSwipeToReply() {
     if (e.touches.length !== 1) return;
     const bubble = e.target.closest('.message-bubble');
     if (!bubble) return;
-    // don't start if tapping a button/link
     if (e.target.closest('button,a')) return;
+    // In selection mode, tap selects/deselects
+    if (selectionMode) {
+      const msg = bubble._msgData;
+      if (msg) toggleSelectMsg(bubble, msg);
+      return;
+    }
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
     currentBubble = bubble;
@@ -2896,6 +3049,7 @@ function setupSwipeToReply() {
   }, { passive: true });
 
   messagesList.addEventListener('touchmove', function(e) {
+    if (selectionMode) return;
     if (!currentBubble) return;
     const dx = e.touches[0].clientX - startX;
     const dy = e.touches[0].clientY - startY;
