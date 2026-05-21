@@ -1092,9 +1092,20 @@ io.on('connection', (socket) => {
       if (connectedUsers[userId]) {
         connectedUsers[userId].delete(socket.id);
         if (connectedUsers[userId].size === 0) {
-          delete connectedUsers[userId];
-          if (cache.users[userId]) { cache.users[userId].status = 'offline'; saveUser(cache.users[userId]); }
-          io.emit('user_status', { userId, status: 'offline' });
+          // Grace period: wait 8 seconds before marking offline
+          // This prevents "offline" flash during page reloads
+          setTimeout(() => {
+            if (!connectedUsers[userId] || connectedUsers[userId].size === 0) {
+              delete connectedUsers[userId];
+              if (cache.users[userId] && cache.users[userId].status !== 'offline') {
+                const preferredStatus = cache.users[userId].status;
+                // Only set offline if preferred status was online/busy/away
+                cache.users[userId].status = 'offline';
+                saveUser(cache.users[userId]);
+                io.emit('user_status', { userId, status: 'offline' });
+              }
+            }
+          }, 8000);
         }
       }
     }

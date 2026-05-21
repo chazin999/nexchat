@@ -267,16 +267,17 @@ function initSocket() {
       if (el) {
         const textEl = el.querySelector('.msg-text');
         if (textEl) {
-          // Preserve links, just update content
           textEl.innerHTML = '';
           textEl.textContent = text;
-          let editedLabel = el.querySelector('.msg-edited-label');
-          if (!editedLabel) {
-            editedLabel = document.createElement('span');
-            editedLabel.className = 'msg-edited-label';
-            editedLabel.textContent = ' (editado)';
-            textEl.appendChild(editedLabel);
-          }
+        }
+        let editedLabel = el.querySelector('.msg-edited-label');
+        if (!editedLabel) {
+          editedLabel = document.createElement('span');
+          editedLabel.className = 'msg-edited-label';
+          editedLabel.textContent = '(editado)';
+          const footer = el.querySelector('.msg-footer');
+          if (footer) el.insertBefore(editedLabel, footer);
+          else el.appendChild(editedLabel);
         }
       }
     }
@@ -373,6 +374,12 @@ function initSocket() {
     if (activeChat && activeChat.type === 'friend' && activeChat.data.id === userId) updateChatStatus(status);
     updateFriendStatus(userId, status);
     refreshChatList();
+    // Update own status dot in header
+    if (currentUser && userId === currentUser.id) {
+      const myDot = document.getElementById('my-status-dot');
+      if (myDot) myDot.className = 'status-dot ' + status;
+      currentUser.status = status;
+    }
     // When friend comes online, upgrade our ✔ → ✔✔ (sent → delivered)
     if (status === 'online') upgradeToDelivered(userId);
   });
@@ -1023,14 +1030,14 @@ function buildMessageEl(msg, isOut, showAvatar) {
     } else {
       textEl.textContent = raw;
     }
-    // Show edited label
+    bubble.appendChild(textEl);
+    // Show edited label below text, before footer
     if (msg.edited) {
       const editedLabel = document.createElement('span');
       editedLabel.className = 'msg-edited-label';
-      editedLabel.textContent = ' (editado)';
-      textEl.appendChild(editedLabel);
+      editedLabel.textContent = '(editado)';
+      bubble.appendChild(editedLabel);
     }
-    bubble.appendChild(textEl);
   }
 
   const footer = document.createElement('div');
@@ -3589,6 +3596,9 @@ function showEditMessageDialog(msg) {
   title.style.cssText = 'font-weight:700;font-size:15px;color:var(--text-primary);margin-bottom:12px;display:flex;align-items:center;gap:8px;';
   title.innerHTML = '<span>✏️</span><span>Editar mensagem</span>';
 
+  const originalText = msg._originalText || msg.text || '';
+  if (!msg._originalText) msg._originalText = msg.text || '';
+
   const textarea = document.createElement('textarea');
   textarea.value = msg.text || '';
   textarea.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:12px;padding:12px;color:var(--text-primary);font-size:15px;resize:none;min-height:80px;font-family:inherit;outline:none;';
@@ -3622,19 +3632,25 @@ function showEditMessageDialog(msg) {
       const el = document.querySelector('[data-msg-id="' + msg.id + '"]');
       if (el) {
         const textEl = el.querySelector('.msg-text');
-        if (textEl) {
-          textEl.textContent = newText;
-          let editedLabel = el.querySelector('.msg-edited-label');
+        if (textEl) { textEl.textContent = newText; }
+        const isReverted = newText === originalText;
+        let editedLabel = el.querySelector('.msg-edited-label');
+        if (!isReverted) {
           if (!editedLabel) {
             editedLabel = document.createElement('span');
             editedLabel.className = 'msg-edited-label';
-            editedLabel.textContent = ' (editado)';
-            textEl.appendChild(editedLabel);
+            editedLabel.textContent = '(editado)';
+            const footer = el.querySelector('.msg-footer');
+            if (footer) el.insertBefore(editedLabel, footer);
+            else el.appendChild(editedLabel);
           }
+          msg.edited = true;
+        } else {
+          if (editedLabel) editedLabel.remove();
+          msg.edited = false;
         }
       }
       msg.text = newText;
-      msg.edited = true;
       overlay.remove();
       showToast('✅ Mensagem editada!');
     } catch(e) {
