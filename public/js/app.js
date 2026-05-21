@@ -1586,61 +1586,73 @@ async function openGroupModal(groupData) {
 
 // ─── MEMBER POPUP ─────────────────────────────────────────
 function setupMemberPopupClose() {
-  document.addEventListener('click', function(e) {
-    const popup = document.getElementById('member-popup');
-    if (!popup || popup.classList.contains('hidden')) return;
-    if (!popup.contains(e.target)) {
-      popup.classList.add('hidden');
-    }
-  });
-  document.addEventListener('touchstart', function(e) {
-    const popup = document.getElementById('member-popup');
-    if (!popup || popup.classList.contains('hidden')) return;
-    if (!popup.contains(e.target)) {
-      popup.classList.add('hidden');
-    }
-  }, { passive: true });
+  // Popup replaced by overlay bottom sheet — closing handled by overlay click
 }
 
 function showMemberPopup(e, member, groupData, callerIsAdmin, callerIsOwner) {
-  e.stopPropagation();
-  const popup = document.getElementById('member-popup');
-  const avatarImg = document.getElementById('member-popup-avatar');
-  avatarImg.src = member.avatar || DEFAULT_AVATAR(member.name);
-  avatarImg.onerror = () => { avatarImg.src = DEFAULT_AVATAR(member.name); };
-  document.getElementById('member-popup-name').textContent = member.name;
+  if (e && e.stopPropagation) e.stopPropagation();
+
+  // Remove existing sheet
+  const existing = document.getElementById('member-sheet-overlay');
+  if (existing) existing.remove();
+
   const isAdminMember = (groupData.admins || []).includes(member.id);
   const isOwnerMember = member.id === groupData.createdBy;
-  document.getElementById('member-popup-role').textContent = isOwnerMember ? '👑 Dono' : (isAdminMember ? '⚡ Admin' : 'Membro');
-  const actionsEl = document.getElementById('member-popup-actions');
-  actionsEl.innerHTML = '';
+  const roleText = isOwnerMember ? '👑 Dono' : (isAdminMember ? '⚡ Admin' : 'Membro');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'member-sheet-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.45);';
+
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'background:var(--bg-secondary);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:0 0 calc(16px + env(safe-area-inset-bottom));animation:slideUp 0.22s ease;overflow:hidden;';
+
+  function closeSheet() { overlay.remove(); }
+
+  // Header with avatar + name + role
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;gap:14px;padding:20px 24px 16px;border-bottom:1px solid var(--border);';
+  const av = document.createElement('img');
+  av.src = member.avatar || DEFAULT_AVATAR(member.name);
+  av.onerror = () => { av.src = DEFAULT_AVATAR(member.name); };
+  av.style.cssText = 'width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;';
+  const info = document.createElement('div');
+  const nameEl = document.createElement('div');
+  nameEl.textContent = member.name;
+  nameEl.style.cssText = 'font-weight:700;font-size:16px;color:var(--text-primary);';
+  const roleEl = document.createElement('div');
+  roleEl.textContent = roleText;
+  roleEl.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:2px;';
+  info.appendChild(nameEl);
+  info.appendChild(roleEl);
+  header.appendChild(av);
+  header.appendChild(info);
+  sheet.appendChild(header);
+
+  function makeBtn(icon, label, color, onClick) {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:flex;align-items:center;gap:14px;width:100%;padding:15px 24px;background:none;border:none;cursor:pointer;font-size:15px;color:' + (color || 'var(--text-primary)') + ';text-align:left;';
+    btn.innerHTML = '<span style="font-size:19px;width:24px;text-align:center">' + icon + '</span><span>' + label + '</span>';
+    btn.addEventListener('mouseenter', () => btn.style.background = 'var(--bg-tertiary)');
+    btn.addEventListener('mouseleave', () => btn.style.background = 'none');
+    btn.addEventListener('click', () => { closeSheet(); onClick(); });
+    btn.addEventListener('touchend', (ev) => { ev.preventDefault(); closeSheet(); onClick(); }, { passive: false });
+    sheet.appendChild(btn);
+  }
 
   // Message privately
-  const msgBtn = document.createElement('button');
-  msgBtn.className = 'member-popup-btn';
-  msgBtn.textContent = '💬 Mensagem Privada';
-  msgBtn.addEventListener('click', function() {
-    popup.classList.add('hidden');
-    // Check if already friend
+  makeBtn('💬', 'Mensagem Privada', '', () => {
     const isFriend = (currentUser.friends || []).includes(member.id);
-    if (!isFriend) {
-      showToast('Adicione ' + member.name + ' como amigo primeiro');
-      return;
-    }
+    if (!isFriend) { showToast('Adicione ' + member.name + ' como amigo primeiro'); return; }
     const friendData = friendsList.find(f => f.id === member.id) || member;
     closeModal('group-modal');
     openChat('friend', friendData);
   });
-  actionsEl.appendChild(msgBtn);
 
-  // Send friend request
+  // Friend request
   const isFriend = (currentUser.friends || []).includes(member.id);
   if (!isFriend) {
-    const frBtn = document.createElement('button');
-    frBtn.className = 'member-popup-btn';
-    frBtn.textContent = '👥 Enviar Solicitação de Amizade';
-    frBtn.addEventListener('click', async function() {
-      popup.classList.add('hidden');
+    makeBtn('👥', 'Enviar Solicitação de Amizade', '', async () => {
       try {
         const res = await fetch('/api/friends/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetId: member.id }) });
         const data = await res.json();
@@ -1648,43 +1660,29 @@ function showMemberPopup(e, member, groupData, callerIsAdmin, callerIsOwner) {
         else showToast(data.error || 'Erro ao enviar');
       } catch { showToast('Erro ao enviar solicitação'); }
     });
-    actionsEl.appendChild(frBtn);
   }
 
-  // Admin management (only for admins)
+  // Admin management
   if (callerIsAdmin && !isOwnerMember) {
     if (!isAdminMember) {
-      const makeAdminBtn = document.createElement('button');
-      makeAdminBtn.className = 'member-popup-btn';
-      makeAdminBtn.textContent = '⚡ Tornar Admin';
-      makeAdminBtn.addEventListener('click', async function() {
-        popup.classList.add('hidden');
+      makeBtn('⚡', 'Tornar Admin', '', async () => {
         const res = await fetch('/api/groups/' + groupData.id + '/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: member.id, action: 'add' }) });
         if (res.ok) { showToast('✅ ' + member.name + ' agora é admin!'); closeModal('group-modal'); openGroupModal(groupData); }
         else { const d = await res.json(); showToast(d.error || 'Erro'); }
       });
-      actionsEl.appendChild(makeAdminBtn);
     } else {
-      const removeAdminBtn = document.createElement('button');
-      removeAdminBtn.className = 'member-popup-btn';
-      removeAdminBtn.textContent = '↩ Remover Admin';
-      removeAdminBtn.addEventListener('click', async function() {
-        popup.classList.add('hidden');
+      makeBtn('↩', 'Remover Admin', '', async () => {
         const res = await fetch('/api/groups/' + groupData.id + '/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: member.id, action: 'remove' }) });
         if (res.ok) { showToast('Admin removido'); closeModal('group-modal'); openGroupModal(groupData); }
         else { const d = await res.json(); showToast(d.error || 'Erro'); }
       });
-      actionsEl.appendChild(removeAdminBtn);
     }
   }
 
-  // Position popup
-  const rect = e.currentTarget.getBoundingClientRect ? e.currentTarget.getBoundingClientRect() : { left: e.clientX, top: e.clientY, width: 0 };
-  const x = rect.left;
-  const y = rect.top + (rect.height || 0);
-  popup.style.left = Math.min(x, window.innerWidth - 220) + 'px';
-  popup.style.top = Math.min(y, window.innerHeight - 200) + 'px';
-  popup.classList.remove('hidden');
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closeSheet(); });
+  overlay.addEventListener('touchend', (ev) => { if (ev.target === overlay) { ev.preventDefault(); closeSheet(); } }, { passive: false });
+  document.body.appendChild(overlay);
 }
 
 // ─── BACK BUTTON + SWIPE ──────────────────────────────────
@@ -2992,32 +2990,59 @@ function setupSwipeToReply() {
 // Store messages globally for swipe reply lookup
 const _origRenderMessages = typeof renderMessages === 'function' ? renderMessages : null;
 
-// ─── STICKER CONTEXT MENU ─────────────────────────────────
+// ─── STICKER CONTEXT MENU (bottom sheet) ──────────────────
 function showStickerContextMenu(e, stickerUrl, senderName) {
   // Remove existing
-  const existing = document.getElementById('sticker-ctx-menu');
+  const existing = document.getElementById('sticker-sheet-overlay');
   if (existing) existing.remove();
 
-  const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 100);
-  const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 100);
-
-  const menu = document.createElement('div');
-  menu.id = 'sticker-ctx-menu';
-  menu.className = 'sticker-ctx-menu';
-  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 120) + 'px';
-
-  // Check if already saved
   const alreadySaved = stickerList.some(s => s.url === stickerUrl);
-  const alreadyFav = stickerList.find(s => s.url === stickerUrl)?.favorited;
+  const existingSticker = stickerList.find(s => s.url === stickerUrl);
+  const alreadyFav = existingSticker?.favorited;
 
-  const saveBtn = document.createElement('button');
-  saveBtn.className = 'sticker-ctx-item';
-  saveBtn.innerHTML = (alreadySaved ? '✅' : '💾') + ' ' + (alreadySaved ? 'Já salva' : 'Salvar figurinha');
-  saveBtn.addEventListener('click', async () => {
-    menu.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'sticker-sheet-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.55);';
+
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'background:var(--bg-secondary);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:0 0 calc(16px + env(safe-area-inset-bottom));animation:slideUp 0.22s ease;overflow:hidden;';
+
+  function closeSheet() { overlay.remove(); }
+
+  // ── Sticker preview + creator name ──────────────────────
+  const preview = document.createElement('div');
+  preview.style.cssText = 'display:flex;flex-direction:column;align-items:center;padding:20px 24px 16px;border-bottom:1px solid var(--border);gap:10px;';
+
+  const stickerImg = document.createElement('img');
+  stickerImg.src = stickerUrl;
+  stickerImg.style.cssText = 'width:110px;height:110px;object-fit:contain;border-radius:14px;';
+
+  if (senderName) {
+    const creatorEl = document.createElement('div');
+    creatorEl.style.cssText = 'font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:5px;';
+    creatorEl.innerHTML = '<span>🎭</span><span>' + escHtml(senderName) + '</span>';
+    preview.appendChild(stickerImg);
+    preview.appendChild(creatorEl);
+  } else {
+    preview.appendChild(stickerImg);
+  }
+  sheet.appendChild(preview);
+
+  // ── Action buttons ───────────────────────────────────────
+  function makeBtn(icon, label, color, onClick) {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:flex;align-items:center;gap:14px;width:100%;padding:15px 24px;background:none;border:none;cursor:pointer;font-size:15px;color:' + (color || 'var(--text-primary)') + ';text-align:left;';
+    btn.innerHTML = '<span style="font-size:19px;width:24px;text-align:center">' + icon + '</span><span>' + label + '</span>';
+    btn.addEventListener('mouseenter', () => btn.style.background = 'var(--bg-tertiary)');
+    btn.addEventListener('mouseleave', () => btn.style.background = 'none');
+    btn.addEventListener('click', () => { closeSheet(); onClick(); });
+    btn.addEventListener('touchend', (ev) => { ev.preventDefault(); closeSheet(); onClick(); }, { passive: false });
+    sheet.appendChild(btn);
+  }
+
+  // Save button
+  makeBtn(alreadySaved ? '✅' : '💾', alreadySaved ? 'Já salva' : 'Salvar figurinha', '', async () => {
     if (alreadySaved) { showToast('Figurinha já está salva!'); return; }
-    // Download and re-upload as sticker
     try {
       const res = await fetch(stickerUrl);
       const blob = await res.blob();
@@ -3026,15 +3051,11 @@ function showStickerContextMenu(e, stickerUrl, senderName) {
       const r = await fetch('/api/stickers', { method: 'POST', body: fd });
       const data = await r.json();
       if (data.sticker) { stickerList.push(data.sticker); showToast('🎭 Figurinha salva!'); }
-    } catch(e) { showToast('❌ Erro ao salvar figurinha'); }
+    } catch { showToast('❌ Erro ao salvar figurinha'); }
   });
 
-  const favBtn = document.createElement('button');
-  favBtn.className = 'sticker-ctx-item';
-  const existingSticker = stickerList.find(s => s.url === stickerUrl);
-  favBtn.innerHTML = (alreadyFav ? '⭐' : '☆') + ' ' + (alreadyFav ? 'Desfavoritar' : 'Favoritar');
-  favBtn.addEventListener('click', async () => {
-    menu.remove();
+  // Favorite button
+  makeBtn(alreadyFav ? '⭐' : '☆', alreadyFav ? 'Desfavoritar' : 'Favoritar', '', async () => {
     if (!existingSticker) { showToast('Salve a figurinha primeiro!'); return; }
     const r = await fetch('/api/stickers/' + existingSticker.id + '/favorite', { method: 'PUT' });
     const data = await r.json();
@@ -3043,27 +3064,19 @@ function showStickerContextMenu(e, stickerUrl, senderName) {
     showToast(data.sticker.favorited ? '⭐ Favoritada!' : 'Desfavoritada');
   });
 
-  const viewBtn = document.createElement('button');
-  viewBtn.className = 'sticker-ctx-item';
-  viewBtn.innerHTML = '🔍 Ver figurinha';
-  viewBtn.addEventListener('click', () => { menu.remove(); openMediaPreview('image', stickerUrl); });
+  // View button
+  makeBtn('🔍', 'Ver figurinha', '', () => { openMediaPreview('image', stickerUrl); });
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'sticker-ctx-item sticker-ctx-cancel';
-  cancelBtn.innerHTML = '✕ Cancelar';
-  cancelBtn.addEventListener('click', () => { menu.remove(); });
+  // Divider
+  const divider = document.createElement('div');
+  divider.style.cssText = 'height:1px;background:var(--border);margin:4px 0;';
+  sheet.appendChild(divider);
 
-  menu.appendChild(saveBtn);
-  menu.appendChild(favBtn);
-  menu.appendChild(viewBtn);
-  menu.appendChild(cancelBtn);
-  document.body.appendChild(menu);
+  // Cancel button
+  makeBtn('✕', 'Cancelar', 'var(--text-muted)', () => {});
 
-  function onOutsideClick(ev) {
-    if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', onOutsideClick); document.removeEventListener('touchstart', onOutsideClick); }
-  }
-  setTimeout(() => {
-    document.addEventListener('click', onOutsideClick);
-    document.addEventListener('touchstart', onOutsideClick, { passive: true });
-  }, 100);
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closeSheet(); });
+  overlay.addEventListener('touchend', (ev) => { if (ev.target === overlay) { ev.preventDefault(); closeSheet(); } }, { passive: false });
+  document.body.appendChild(overlay);
 }
