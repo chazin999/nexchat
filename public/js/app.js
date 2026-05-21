@@ -708,7 +708,10 @@ function buildMessageEl(msg, isOut, showAvatar) {
     img.className = 'msg-image';
     img.src = msg.url;
     img.alt = 'Imagem';
-    img.addEventListener('click', () => openMediaPreview('image', msg.url));
+    img.addEventListener('click', (e) => {
+      if (selectionMode) { e.stopPropagation(); toggleSelectMsg(bubble, msg); return; }
+      openMediaPreview('image', msg.url);
+    });
     bubble.appendChild(img);
   } else if (msg.type === 'video') {
     const vid = document.createElement('video');
@@ -716,6 +719,12 @@ function buildMessageEl(msg, isOut, showAvatar) {
     vid.src = msg.url;
     vid.controls = true;
     vid.preload = 'metadata';
+    vid.addEventListener('click', (e) => {
+      if (selectionMode) { e.stopPropagation(); e.preventDefault(); toggleSelectMsg(bubble, msg); return; }
+    });
+    vid.addEventListener('touchstart', (e) => {
+      if (selectionMode) { e.stopPropagation(); e.preventDefault(); toggleSelectMsg(bubble, msg); return; }
+    }, { passive: false });
     bubble.appendChild(vid);
   } else if (msg.type === 'audio') {
     bubble.appendChild(buildAudioPlayer(msg.url));
@@ -726,7 +735,11 @@ function buildMessageEl(msg, isOut, showAvatar) {
     img.className = 'msg-sticker';
     img.src = msg.url;
     img.alt = 'Figurinha';
-    img.addEventListener('click', (e) => { e.stopPropagation(); showStickerContextMenu(e, msg.url, msg.senderName || msg.fromName); });
+    img.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (selectionMode) { toggleSelectMsg(bubble, msg); return; }
+      showStickerContextMenu(e, msg.url, msg.senderName || msg.fromName);
+    });
     img.addEventListener('contextmenu', (e) => { e.preventDefault(); showStickerContextMenu(e, msg.url, msg.senderName || msg.fromName); });
     img.addEventListener('touchstart', makeLongPress((e) => showStickerContextMenu(e, msg.url, msg.senderName || msg.fromName)), { passive: true });
     stickerWrap.appendChild(img);
@@ -784,6 +797,10 @@ function buildMessageEl(msg, isOut, showAvatar) {
     e.preventDefault();
     if (selectionMode) { toggleSelectMsg(bubble, msg); return; }
     showContextMenu(e, msg, isOut);
+  });
+  // Single tap selects when already in selection mode
+  bubble.addEventListener('click', function(e) {
+    if (selectionMode) { toggleSelectMsg(bubble, msg); }
   });
   bubble.addEventListener('touchstart', makeLongPress(function(e) {
     if (selectionMode) { toggleSelectMsg(bubble, msg); return; }
@@ -3034,12 +3051,8 @@ function setupSwipeToReply() {
     const bubble = e.target.closest('.message-bubble');
     if (!bubble) return;
     if (e.target.closest('button,a')) return;
-    // In selection mode, tap selects/deselects
-    if (selectionMode) {
-      const msg = bubble._msgData;
-      if (msg) toggleSelectMsg(bubble, msg);
-      return;
-    }
+    // In selection mode, let the bubble's click handler take care of it
+    if (selectionMode) return;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
     currentBubble = bubble;
