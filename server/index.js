@@ -198,12 +198,19 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Catch-all: serve index.html para rotas não reconhecidas
 // ─── SESSION (persistente via MongoDB) ───────────────────
+const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
 app.use(session({
   secret: process.env.SESSION_SECRET || 'nexchat-secret-2024',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' }
+  cookie: {
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    sameSite: isProduction ? 'none' : 'lax',
+    secure: isProduction
+  }
 }));
+// Necessário para sameSite=none funcionar atrás de proxy (Render, etc.)
+if (isProduction) app.set('trust proxy', 1);
 
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/uploads')) return next();
