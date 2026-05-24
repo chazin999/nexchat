@@ -2023,6 +2023,12 @@ function showMemberPopup(e, member, groupData, callerIsAdmin, callerIsOwner) {
 function goBackToList() {
   document.getElementById('app').classList.remove('chat-open');
   activeChat = null;
+  document.getElementById('chat-header').classList.add('hidden');
+  document.getElementById('messages-container').classList.add('hidden');
+  document.getElementById('message-input-area').classList.add('hidden');
+  document.getElementById('no-chat-selected').style.display = '';
+  const msgSearchBar = document.getElementById('msg-search-bar');
+  if (msgSearchBar) msgSearchBar.classList.add('hidden');
 }
 
 function setupBackBtn() {
